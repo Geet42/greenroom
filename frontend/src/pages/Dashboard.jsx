@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { supabase } from "../lib/supabaseClient";
+import { api } from "../lib/api";
 
 const TRACKS = [
   {
@@ -29,6 +30,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -37,9 +39,16 @@ export default function Dashboard() {
       const { data: userData } = await supabase.auth.getUser();
       if (mounted) setUserEmail(userData?.user?.email ?? "");
 
+      const userId = userData?.user?.id;
+      if (!userId) {
+        if (mounted) setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("sessions")
         .select("id, track, role, overall_score, created_at, status")
+        .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(10);
 
@@ -52,6 +61,19 @@ export default function Dashboard() {
       mounted = false;
     };
   }, []);
+
+  const handleDelete = async (sessionId) => {
+    if (!window.confirm("Delete this session and its transcript? This cannot be undone.")) return;
+    setDeletingId(sessionId);
+    try {
+      await api.deleteSession(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    } catch {
+      alert("Failed to delete session. Please try again.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -98,7 +120,7 @@ export default function Dashboard() {
                       <th className="px-4 py-3 font-medium">Score</th>
                       <th className="px-4 py-3 font-medium">Status</th>
                       <th className="px-4 py-3 font-medium">Date</th>
-                      <th className="px-4 py-3 font-medium"></th>
+                      <th className="px-4 py-3 font-medium" colSpan={2}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -117,6 +139,15 @@ export default function Dashboard() {
                           <Link to={`/results/${s.id}`} className="text-amber hover:underline">
                             View
                           </Link>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={() => handleDelete(s.id)}
+                            disabled={deletingId === s.id}
+                            className="text-sm text-mute transition hover:text-coral disabled:opacity-50"
+                          >
+                            {deletingId === s.id ? "Deleting..." : "Delete"}
+                          </button>
                         </td>
                       </tr>
                     ))}

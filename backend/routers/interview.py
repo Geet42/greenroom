@@ -58,11 +58,14 @@ def _persist_evaluation(session_id: str, result: dict):
     sb = get_supabase()
     if not sb:
         return
+
+    star = result.get("star_analysis")
     sb.table("sessions").update(
         {
             "status": "completed",
             "overall_score": result.get("overall_score"),
             "summary": result.get("summary"),
+            "star_analysis": star if star else None,
             "ended_at": _now(),
         }
     ).eq("id", session_id).execute()
@@ -117,11 +120,19 @@ def post_message(req: MessageRequest):
 
 @router.post("/code/run")
 async def run_code(req: RunCodeRequest):
-    try:
-        result = await piston.run_code(req.language, req.version, req.source, req.stdin or "")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Code execution failed: {exc}") from exc
+    result = await piston.run_code(req.language, req.version, req.source, req.stdin or "")
     return result
+
+
+@router.delete("/{session_id}")
+def delete_session(session_id: str):
+    SESSIONS.pop(session_id, None)
+    sb = get_supabase()
+    if sb:
+        sb.table("evaluations").delete().eq("session_id", session_id).execute()
+        sb.table("messages").delete().eq("session_id", session_id).execute()
+        sb.table("sessions").delete().eq("id", session_id).execute()
+    return {"deleted": session_id}
 
 
 @router.post("/end", response_model=EndSessionResponse)
@@ -130,11 +141,26 @@ def end_session(req: EndSessionRequest):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    has_candidate_answer = any(t["role"] == "candidate" for t in session["history"])
+    if not has_candidate_answer:
+        empty_result = {
+            "overall_score": 0,
+            "summary": "No answers were recorded in this session. Start a new session and answer at least one question to receive a score.",
+            "evaluations": [],
+        }
+        _persist_evaluation(req.session_id, empty_result)
+        return EndSessionResponse(
+            overall_score=0,
+            summary=empty_result["summary"],
+            evaluations=[],
+        )
+
     result = llm.evaluate_session(session["track"], session["role"], session["history"])
     _persist_evaluation(req.session_id, result)
 
     return EndSessionResponse(
         overall_score=result.get("overall_score", 5),
         summary=result.get("summary", ""),
+        star_analysis=result.get("star_analysis"),
         evaluations=result.get("evaluations", []),
     )

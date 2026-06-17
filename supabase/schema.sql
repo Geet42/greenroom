@@ -8,6 +8,7 @@ create table if not exists sessions (
   status text not null default 'active',
   overall_score int,
   summary text,
+  star_analysis jsonb,
   created_at timestamptz not null default now(),
   ended_at timestamptz
 );
@@ -58,6 +59,12 @@ create policy "Users can view evaluations from their sessions"
         and sessions.user_id = auth.uid()
     )
   );
+
+-- Deletes are performed by the backend using the service role key, which bypasses RLS.
+-- These policies are here for completeness in case you ever allow direct client deletes.
+create policy "Users can delete their own sessions"
+  on sessions for delete
+  using (auth.uid() = user_id);
 
 create index if not exists idx_messages_session_id on messages (session_id);
 create index if not exists idx_evaluations_session_id on evaluations (session_id);

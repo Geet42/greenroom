@@ -25,5 +25,8 @@ export const api = {
   endSession: (payload) =>
     request("/interview/end", { method: "POST", body: JSON.stringify(payload) }),
 
+  deleteSession: (sessionId) =>
+    request(`/interview/${sessionId}`, { method: "DELETE" }),
+
   speak: (text) => `${BASE_URL}/tts/speak?text=${encodeURIComponent(text)}`
 };

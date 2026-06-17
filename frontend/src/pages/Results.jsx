@@ -58,7 +58,7 @@ export default function Results() {
                   <p className="text-sm text-mute capitalize">{session.track} session</p>
                   <h1 className="mt-1 font-display text-4xl tracking-tight">Session report</h1>
                 </div>
-                {session.overall_score != null && (
+                {session.overall_score != null && session.overall_score > 0 && (
                   <div className="text-right">
                     <p className="font-display text-5xl text-amber">{session.overall_score}</p>
                     <p className="text-xs text-mute">out of 10</p>
@@ -86,6 +86,37 @@ export default function Results() {
                   ))}
                 </div>
               )}
+
+              {session.star_analysis && (() => {
+                const star = typeof session.star_analysis === "string"
+                  ? JSON.parse(session.star_analysis)
+                  : session.star_analysis;
+                const elements = ["situation", "task", "action", "result"];
+                return (
+                  <div className="mt-6 rounded-2xl border border-white/10 bg-panel p-6">
+                    <div className="flex items-center justify-between">
+                      <h2 className="font-display text-xl">STAR Analysis</h2>
+                      <span className="font-display text-2xl text-amber">{star.star_score}/10</span>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      {elements.map((el) => (
+                        <div key={el} className="rounded-xl border border-white/5 bg-panelLight/40 p-4">
+                          <p className="text-xs font-medium uppercase tracking-wide text-mute">{el}</p>
+                          <p className="mt-1 text-sm text-cream/90">{star[el]}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {star.missing_elements?.length > 0 && (
+                      <div className="mt-4">
+                        <p className="text-xs font-medium uppercase tracking-wide text-coral">Missing / vague</p>
+                        <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-mute">
+                          {star.missing_elements.map((m, i) => <li key={i}>{m}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="mt-10">
                 <h2 className="font-display text-xl">Transcript</h2>
