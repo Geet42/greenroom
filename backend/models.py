@@ -43,7 +43,17 @@ class EvaluationCategory(BaseModel):
     feedback: str
 
 
+class STARAnalysis(BaseModel):
+    situation: str
+    task: str
+    action: str
+    result: str
+    star_score: int
+    missing_elements: List[str]
+
+
 class EndSessionResponse(BaseModel):
     overall_score: int
     summary: str
+    star_analysis: Optional[STARAnalysis] = None
     evaluations: List[EvaluationCategory]

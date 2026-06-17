@@ -46,10 +46,11 @@ export default function Interview() {
 
   const { isSupported, isListening, transcript, interimTranscript, start, stop, reset } =
     useSpeechRecognition();
-  const { isSpeaking, speak } = useSpeechSynthesis();
+  const { isSpeaking, speak, stop: stopSpeech } = useSpeechSynthesis();
 
   const [answerText, setAnswerText] = useState("");
   const transcriptEndRef = useRef(null);
+  const initDoneRef = useRef(false);
 
   useEffect(() => {
     if (isListening) {
@@ -64,6 +65,9 @@ export default function Interview() {
   };
 
   useEffect(() => {
+    if (initDoneRef.current) return;
+    initDoneRef.current = true;
+
     async function init() {
       try {
         const { data: userData } = await supabase.auth.getUser();
@@ -99,6 +103,7 @@ export default function Interview() {
     const answer = answerText.trim();
     if (!answer || !sessionId) return;
 
+    if (isListening) stop();
     setMessages((prev) => [...prev, { role: "candidate", text: answer }]);
     setAnswerText("");
     reset();
@@ -143,14 +148,24 @@ export default function Interview() {
   };
 
   const handleEnd = async () => {
-    if (!sessionId) return;
+    if (!sessionId || ending) return;
     setEnding(true);
+    stopSpeech();
+    stop();
     try {
       await api.endSession({ session_id: sessionId });
-    } catch {
-      // still navigate, results page will show what it can
+      navigate(`/results/${sessionId}`);
+    } catch (err) {
+      console.error("End session failed:", err);
+      setEnding(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "interviewer",
+          text: "I had trouble generating your report. Please try ending the session again."
+        }
+      ]);
     }
-    navigate(`/results/${sessionId}`);
   };
 
   return (
