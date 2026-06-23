@@ -87,17 +87,17 @@ def _persist_evaluation(session_id: str, result: dict):
 @router.post("/start", response_model=StartSessionResponse)
 def start_session(req: StartSessionRequest):
     session_id = str(uuid.uuid4())
-    question = llm.opening_question(req.track)
+    greeting = llm.opening_message(req.track, req.role)
 
     SESSIONS[session_id] = {
         "track": req.track,
         "role": req.role,
-        "history": [{"role": "interviewer", "content": question}],
+        "history": [{"role": "interviewer", "content": greeting}],
     }
 
-    _persist_session_start(session_id, req.user_id, req.track, req.role, question)
+    _persist_session_start(session_id, req.user_id, req.track, req.role, greeting)
 
-    return StartSessionResponse(session_id=session_id, track=req.track, question=question)
+    return StartSessionResponse(session_id=session_id, track=req.track, question=greeting)
 
 
 @router.post("/message", response_model=MessageResponse)

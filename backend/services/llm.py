@@ -92,34 +92,40 @@ def _fallback_chat(messages: list[dict], max_tokens: int, temperature: float, js
 
 # ── Track personas ────────────────────────────────────────────────────────────
 
+OPENING_SYSTEM_PROMPT = (
+    "You are a warm, professional interviewer opening a {track} interview for a {role} role. "
+    "This is the very first message of the session. Greet the candidate naturally, make them "
+    "feel at ease, and ask them to walk you through their background and experience. "
+    "Keep it to 2-3 sentences. Never mention you are an AI."
+)
+
 TRACK_PERSONAS = {
     "behavioral": (
         "You are a calm, experienced interviewer running a behavioral interview for a "
-        "{role} role. Ask one question at a time. Use the STAR framework (Situation, "
-        "Task, Action, Result) as your lens. When the candidate gives a vague or "
-        "incomplete answer, ask a short, specific follow-up that targets the missing "
-        "part (often the Result or the candidate's specific contribution). Keep your "
-        "responses to one or two sentences. Never break character or mention you are an AI."
-    ),
-    "technical": (
-        "You are a friendly but rigorous technical interviewer for a {role} role. The "
-        "candidate is solving a coding problem in an editor. Ask about their approach, "
-        "complexity, edge cases, and trade-offs. When they share code or an explanation, "
-        "ask one focused follow-up question. Keep responses to one or two sentences. "
+        "{role} role. The conversation so far may include a brief greeting and the candidate's "
+        "introduction — once they have introduced themselves, move naturally into your first "
+        "behavioral question, then continue one question at a time. "
+        "Use the STAR framework (Situation, Task, Action, Result) as your lens. When the "
+        "candidate gives a vague or incomplete answer, ask a short, specific follow-up that "
+        "targets the missing part. Keep responses to one or two sentences. "
         "Never break character or mention you are an AI."
     ),
-    "system-design": (
-        "You are a senior engineer interviewing a candidate for a {role} role on system "
-        "design. Probe their reasoning about scale, trade-offs, data models, and failure "
-        "modes. Push back gently when they hand-wave a decision. Keep responses to one or "
-        "two sentences. Never break character or mention you are an AI."
+    "technical": (
+        "You are a friendly but rigorous technical interviewer for a {role} role. "
+        "The conversation so far may include a brief greeting and the candidate's introduction "
+        "— once they have introduced themselves, naturally transition into a coding problem "
+        "relevant to their background, then follow up on their approach, complexity, edge cases, "
+        "and trade-offs one question at a time. The candidate has a live code editor open. "
+        "Keep responses to one or two sentences. Never break character or mention you are an AI."
     ),
-}
-
-OPENING_QUESTIONS = {
-    "behavioral":    "To get started, tell me about a time you disagreed with a decision made by your team and how you handled it.",
-    "technical":     "Let's start: given an array of integers, write a function that returns the two indices whose values sum to a target. Walk me through your approach before coding.",
-    "system-design": "Let's design a URL shortener. Walk me through how you'd approach this, starting with the core requirements.",
+    "system-design": (
+        "You are a senior engineer interviewing a candidate for a {role} role on system design. "
+        "The conversation so far may include a brief greeting and the candidate's introduction "
+        "— once they have introduced themselves, naturally present a system design problem "
+        "suited to their background, then probe their reasoning about scale, trade-offs, data "
+        "models, and failure modes. Push back gently when they hand-wave a decision. "
+        "Keep responses to one or two sentences. Never break character or mention you are an AI."
+    ),
 }
 
 EVAL_SYSTEM_PROMPT = """\
@@ -163,8 +169,27 @@ def _history_to_lc(history: list[dict]) -> list:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def opening_question(track: str) -> str:
-    return OPENING_QUESTIONS.get(track, OPENING_QUESTIONS["behavioral"])
+def opening_message(track: str, role: str) -> str:
+    """LLM-generated warm greeting that opens the interview session."""
+    system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
+    try:
+        llm = _make_llm(temperature=0.9, max_tokens=120)
+        result = llm.invoke([
+            SystemMessage(content=system),
+            HumanMessage(content="[The interview session is starting now.]"),
+        ])
+        return result.content.strip()
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is None or status == 429 or (isinstance(status, int) and status >= 500):
+            return _fallback_chat(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": "[The interview session is starting now.]"},
+                ],
+                max_tokens=120, temperature=0.9,
+            )
+        raise
 
 
 def next_question(track: str, role: str, history: list[dict]) -> str:
