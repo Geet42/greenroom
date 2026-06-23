@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import Navbar from "../components/Navbar";
 import Waveform from "../components/Waveform";
 import { api } from "../lib/api";
+
+const SystemDesignBoard = lazy(() => import("../components/SystemDesignBoard"));
 import { supabase } from "../lib/supabaseClient";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "../hooks/useSpeechSynthesis";
@@ -14,6 +16,46 @@ const TRACK_LABELS = {
   "system-design": "System design"
 };
 
+function generateBoardDescription(elements) {
+  if (!elements || elements.length === 0) return null;
+
+  // Map element id → text label
+  const labelOf = {};
+  elements.forEach((el) => {
+    if (el.type === "text" && el.containerId) {
+      labelOf[el.containerId] = (labelOf[el.containerId] || "") + el.text?.trim();
+    }
+  });
+  elements.forEach((el) => {
+    if (el.type === "text" && !el.containerId && el.text?.trim()) {
+      labelOf[el.id] = el.text.trim();
+    }
+  });
+
+  const shapeTypes = new Set(["rectangle", "ellipse", "diamond", "triangle", "trapezoid", "parallelogram"]);
+
+  const components = elements
+    .filter((el) => shapeTypes.has(el.type))
+    .map((el) => labelOf[el.id] || el.type)
+    .filter(Boolean);
+
+  const connections = elements
+    .filter((el) => el.type === "arrow" && el.startBinding?.elementId && el.endBinding?.elementId)
+    .map((el) => {
+      const from = labelOf[el.startBinding.elementId] || "node";
+      const to   = labelOf[el.endBinding.elementId]   || "node";
+      const via  = labelOf[el.id];
+      return via ? `${from} --[${via}]--> ${to}` : `${from} → ${to}`;
+    });
+
+  if (components.length === 0 && connections.length === 0) return null;
+
+  const parts = ["[Architecture diagram]"];
+  if (components.length) parts.push(`Components: ${components.join(", ")}`);
+  if (connections.length) parts.push(`Connections: ${connections.join(", ")}`);
+  return parts.join("\n");
+}
+
 const LANGUAGES = [
   { id: "python",     label: "Python",     monaco: "python",     piston: "python", version: "3.10.0"  },
   { id: "javascript", label: "JavaScript", monaco: "javascript", piston: "node",   version: "18.15.0" },
@@ -22,38 +64,10 @@ const LANGUAGES = [
 ];
 
 const STARTER_CODE = {
-  python: `def two_sum(nums: list[int], target: int) -> list[int]:
-    # Write your solution here
-    pass
-`,
-  javascript: `/**
- * @param {number[]} nums
- * @param {number} target
- * @return {number[]}
- */
-function twoSum(nums, target) {
-
-}
-`,
-  java: `class Solution {
-    public int[] twoSum(int[] nums, int target) {
-        // Write your solution here
-        return new int[]{};
-    }
-}
-`,
-  cpp: `#include <vector>
-#include <unordered_map>
-using namespace std;
-
-class Solution {
-public:
-    vector<int> twoSum(vector<int>& nums, int target) {
-        // Write your solution here
-        return {};
-    }
-};
-`,
+  python: `# Write your solution here\n`,
+  javascript: `// Write your solution here\n`,
+  java: `class Solution {\n    // Write your solution here\n}\n`,
+  cpp: `#include <bits/stdc++.h>\nusing namespace std;\n\n// Write your solution here\n`,
 };
 
 export default function Interview() {
@@ -80,6 +94,7 @@ export default function Interview() {
   const [answerText, setAnswerText] = useState("");
   const transcriptEndRef = useRef(null);
   const initDoneRef = useRef(false);
+  const boardRef = useRef(null);
 
   useEffect(() => {
     if (isListening) {
@@ -133,6 +148,14 @@ export default function Interview() {
     if (!answer || !sessionId) return;
 
     if (isListening) stop();
+
+    // Append board diagram description for system-design track
+    let messageToSend = answer;
+    if (track === "system-design" && boardRef.current) {
+      const desc = generateBoardDescription(boardRef.current.getElements());
+      if (desc) messageToSend = `${answer}\n\n${desc}`;
+    }
+
     setMessages((prev) => [...prev, { role: "candidate", text: answer }]);
     setAnswerText("");
     reset();
@@ -141,7 +164,7 @@ export default function Interview() {
     try {
       const res = await api.sendMessage({
         session_id: sessionId,
-        message: answer,
+        message: messageToSend,
         code: track === "technical" ? code : undefined,
         language: track === "technical" ? language : undefined
       });
@@ -165,7 +188,7 @@ export default function Interview() {
     setRevealedCount(0);
 
     try {
-      const res = await api.runTests({ language: lang.piston, version: lang.version, source: code });
+      const res = await api.runTests({ session_id: sessionId, language: lang.piston, version: lang.version, source: code });
       setTestResults(res);
       // Reveal visible test cases one by one, then all hidden at once
       const visibleLen = res.visible_tests?.length ?? 0;
@@ -437,6 +460,10 @@ export default function Interview() {
                   )}
                 </div>
               </div>
+            ) : track === "system-design" ? (
+              <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
+                <SystemDesignBoard ref={boardRef} />
+              </Suspense>
             ) : (
               <div className="p-6">
                 <h2 className="font-display text-xl">During this session</h2>
