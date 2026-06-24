@@ -90,6 +90,11 @@ export default function Interview() {
   const { isSupported, isListening, transcript, interimTranscript, start, stop, reset } =
     useSpeechRecognition();
   const { isSpeaking, speak, stop: stopSpeech } = useSpeechSynthesis();
+  const [isMuted, setIsMuted] = useState(false);
+
+  const speakIfUnmuted = useCallback((text) => {
+    if (!isMuted) speak(text);
+  }, [isMuted, speak]);
 
   const [answerText, setAnswerText] = useState("");
   const transcriptEndRef = useRef(null);
@@ -122,7 +127,7 @@ export default function Interview() {
         });
         setSessionId(res.session_id);
         setMessages([{ role: "interviewer", text: res.question }]);
-        speak(res.question);
+        speakIfUnmuted(res.question);
       } catch (err) {
         setMessages([
           {
@@ -243,13 +248,25 @@ export default function Interview() {
                 <span className="h-2 w-2 rounded-full bg-sage" />
                 {TRACK_LABELS[track] || "Interview"} session
               </div>
-              <button
-                onClick={handleEnd}
-                disabled={ending || !sessionId}
-                className="rounded-full border border-white/10 px-4 py-1.5 text-xs text-mute transition hover:border-coral/40 hover:text-coral disabled:opacity-50"
-              >
-                {ending ? "Wrapping up..." : "End session"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (!isMuted && isSpeaking) stopSpeech();
+                    setIsMuted(m => !m);
+                  }}
+                  title={isMuted ? "Unmute interviewer" : "Mute interviewer"}
+                  className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-mute transition hover:border-white/30 hover:text-cream"
+                >
+                  {isMuted ? "🔇 Muted" : "🔊 Mute"}
+                </button>
+                <button
+                  onClick={handleEnd}
+                  disabled={ending || !sessionId}
+                  className="rounded-full border border-white/10 px-4 py-1.5 text-xs text-mute transition hover:border-coral/40 hover:text-coral disabled:opacity-50"
+                >
+                  {ending ? "Wrapping up..." : "End session"}
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5" style={{ maxHeight: "55vh" }}>
@@ -269,7 +286,7 @@ export default function Interview() {
                   <p className="mt-1 text-cream/90">{m.text}</p>
                 </div>
               ))}
-              {isSpeaking && (
+              {isSpeaking && !isMuted && (
                 <p className="text-xs text-mute">Interviewer is speaking...</p>
               )}
               <div ref={transcriptEndRef} />
