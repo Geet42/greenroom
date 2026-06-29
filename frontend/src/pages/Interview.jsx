@@ -91,10 +91,16 @@ export default function Interview() {
     useSpeechRecognition();
   const { isSpeaking, speak, stop: stopSpeech } = useSpeechSynthesis();
   const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
+  const lastInterviewerTextRef = useRef(null);
+
+  // Stop speech when navigating away
+  useEffect(() => () => stopSpeech(), [stopSpeech]);
 
   const speakIfUnmuted = useCallback((text) => {
-    if (!isMuted) speak(text);
-  }, [isMuted, speak]);
+    lastInterviewerTextRef.current = text;
+    if (!isMutedRef.current) speak(text);
+  }, [speak]);
 
   const [answerText, setAnswerText] = useState("");
   const transcriptEndRef = useRef(null);
@@ -175,7 +181,7 @@ export default function Interview() {
       });
 
       setMessages((prev) => [...prev, { role: "interviewer", text: res.question }]);
-      speak(res.question);
+      speakIfUnmuted(res.question);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -251,8 +257,14 @@ export default function Interview() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    if (!isMuted && isSpeaking) stopSpeech();
-                    setIsMuted(m => !m);
+                    const nowMuted = !isMuted;
+                    isMutedRef.current = nowMuted;
+                    setIsMuted(nowMuted);
+                    if (nowMuted) {
+                      stopSpeech();
+                    } else if (lastInterviewerTextRef.current) {
+                      speak(lastInterviewerTextRef.current);
+                    }
                   }}
                   title={isMuted ? "Unmute interviewer" : "Mute interviewer"}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-mute transition hover:border-white/30 hover:text-cream"
