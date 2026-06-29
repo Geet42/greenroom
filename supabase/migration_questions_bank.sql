@@ -28,3 +28,8 @@ create index if not exists idx_questions_track on questions (track);
 
 -- stdin/stdout-style problems (CodeContests-derived) have no function signature
 alter table questions alter column function_name drop not null;
+
+-- Lazily-generated, sandbox-verified Java/C++ harnesses for LeetCode-style
+-- (call/expected) problems, keyed by language: {"java": {boilerplate, harness}, "cpp": {...}}.
+-- See services/harness_generator.py — populated on first use, not upfront.
+alter table questions add column if not exists harnesses jsonb;

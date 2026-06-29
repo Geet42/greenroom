@@ -18,7 +18,7 @@ from models import (
     EndSessionRequest,
     EndSessionResponse,
 )
-from services import llm, piston, question_bank, question_generator
+from services import llm, piston, question_bank, question_generator, harness_generator
 from services import test_runner
 from services.rate_limit import check_rate_limit
 from services.supabase_client import get_supabase
@@ -269,6 +269,29 @@ async def run_tests(req: RunTestsRequest, user: AuthenticatedUser = Depends(get_
             assigned["tests"], assigned.get("visible_count", 3),
         )
         return RunTestsResponse(**parsed)
+
+    # Java/C++ aren't supported by the call/expected harness format below — the
+    # 210 imported LeetCode problems only ever had verified Python test cases.
+    # Generate (and cache) a real harness for this problem on first use instead
+    # of refusing the language outright.
+    bank_lang = "cpp" if req.language == "gcc" else req.language
+    if assigned and bank_lang in ("java", "cpp") and bank_lang not in (assigned.get("languages") or []):
+        harness_data = await harness_generator.get_or_generate(assigned, bank_lang)
+        if harness_data:
+            if bank_lang == "java":
+                full_source = harness_generator.merge_java_sources(req.source, harness_data["harness"])
+            else:
+                full_source = req.source + "\n\n" + harness_data["harness"]
+            result = await piston.run_code(req.language, req.version, full_source, stdin="")
+            raw = result.get("run", {})
+            parsed = test_runner.parse_results(raw.get("stdout", ""), raw.get("stderr", ""))
+            return RunTestsResponse(**parsed)
+        return RunTestsResponse(
+            status="compile_error",
+            compile_error=f"This problem doesn't support {req.language} yet.",
+            error_type="permanent",
+            visible_tests=[], hidden_tests=[], passed=0, total=0,
+        )
 
     harness = test_runner.generate_harness(
         req.language, req.source, session["history"],
