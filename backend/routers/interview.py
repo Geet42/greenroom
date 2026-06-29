@@ -250,7 +250,14 @@ async def run_tests(req: RunTestsRequest, user: AuthenticatedUser = Depends(get_
     assigned = session.get("assigned_question")
     is_stdio = bool(assigned and assigned.get("tests") and "stdin" in assigned["tests"][0])
     if is_stdio:
-        if req.language not in (assigned.get("languages") or []):
+        # Bank data (imported from CodeContests) stores the C++ entry as "cpp";
+        # the frontend sends Piston/Wandbox's actual compiler id "gcc" for C++.
+        # Accept either spelling rather than relying on the bank data matching
+        # the wire format exactly.
+        allowed = set(assigned.get("languages") or [])
+        if "cpp" in allowed:
+            allowed.add("gcc")
+        if req.language not in allowed:
             return RunTestsResponse(
                 status="compile_error",
                 compile_error=f"This problem doesn't support {req.language} yet.",
