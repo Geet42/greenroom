@@ -18,7 +18,11 @@ You generate test cases for coding interview problems.
 Return ONLY a valid JSON array — no explanation, no markdown, no code fences.
 
 Each element must have exactly two string fields:
-  "call"     — the function call as it would appear in code, e.g. "two_sum([2,7,11,15], 9)"
+  "call"     — Python statements (separated by ";") ending in the expression to check, e.g.
+               "two_sum([2,7,11,15], 9)" for a plain function, or for a stateful object:
+               "obj = LRUCache(2); obj.put(1, 1); obj.put(2, 2); obj.get(1)"
+               Each test case is independent — always declare and assign a fresh object with
+               the exact same variable name ("obj") rather than reusing one from another case.
   "expected" — the expected return value as a literal, e.g. "[0, 1]"
 
 Generate exactly 6 test cases: 3 typical inputs first, then 3 edge cases.
@@ -81,6 +85,7 @@ def _python_harness(source: str, cases: list[dict]) -> str:
     return f'''{source}
 
 import json as _j
+import ast as _ast
 
 _cases = {cases_json}
 _visible = _cases[:3]
@@ -94,9 +99,24 @@ def _eq(a, b):
     except Exception:
         return False
 
+def _run_call(code):
+    """Supports multi-statement test cases (e.g. stateful objects: 'o = Foo(); o.put(1); o.get()'),
+    not just single expressions — Python's eval() alone only accepts one expression."""
+    tree = _ast.parse(code, mode="exec")
+    if not tree.body:
+        return None
+    last = tree.body[-1]
+    ns = globals()
+    if isinstance(last, _ast.Expr):
+        if len(tree.body) > 1:
+            exec(compile(_ast.Module(body=tree.body[:-1], type_ignores=[]), "<test>", "exec"), ns)
+        return eval(compile(_ast.Expression(body=last.value), "<test>", "eval"), ns)
+    exec(compile(tree, "<test>", "exec"), ns)
+    return None
+
 for _i, _tc in enumerate(_visible):
     try:
-        _result   = eval(_tc["call"])
+        _result   = _run_call(_tc["call"])
         _expected = eval(_tc["expected"])
         _passed   = _eq(_result, _expected)
         _out = {{"id": _i+1, "label": f"Case {{_i+1}}", "input": _tc["call"], "expected": _tc["expected"], "passed": _passed}}
@@ -109,7 +129,7 @@ for _i, _tc in enumerate(_visible):
 
 for _i, _tc in enumerate(_hidden):
     try:
-        _result   = eval(_tc["call"])
+        _result   = _run_call(_tc["call"])
         _expected = eval(_tc["expected"])
         _passed   = _eq(_result, _expected)
         print(_j.dumps({{"id": _i+4, "label": f"Hidden {{_i+1}}", "hidden": True, "passed": _passed}}))
