@@ -55,9 +55,13 @@ class/method signature as the boilerplate) gets concatenated immediately BEFORE 
 same file. Declare each test's inputs as native {language} literals (translate the given Python \
 call/expected literals yourself — arrays, nested lists, booleans, null/None, strings), call the \
 candidate's method, and print ONE line of JSON per test case to stdout, in EXACTLY this schema:
-  visible tests (the first 3):  {{"id": N, "label": "Case N", "passed": true|false}}
-  hidden tests (the rest):      {{"id": N, "label": "Hidden N", "hidden": true, "passed": true|false}}
-(This one line of output IS allowed to be JSON — it's printed at runtime, not part of your reply.)
+  visible tests (the first 3): {{"id": N, "label": "Case N", "input": "<the call as a readable \
+string, e.g. twoSum([2,7,11,15], 9)>", "expected": "<expected result as a readable string>", \
+"passed": true|false}}
+  hidden tests (the rest):     {{"id": N, "label": "Hidden N", "hidden": true, "passed": true|false}}
+"input" and "expected" are ONLY required for visible tests — omit them for hidden tests, the \
+candidate should not be able to see hidden test data. (This one line of output IS allowed to be \
+JSON — it's printed at runtime, not part of your reply.)
 Compare results with a deep/structural equality check (e.g. Arrays.equals / Arrays.deepEquals \
 for Java arrays, or element-wise vector comparison for C++) — do not rely on reference/pointer \
 equality. Wrap each test in its own try/catch so one crashing case doesn't stop the rest; on \
