@@ -37,6 +37,7 @@ class RunTestsResponse(BaseModel):
     passed: int
     total: int
     compile_error: Optional[str] = None
+    error_type: Optional[Literal["transient", "permanent"]] = None
 
 
 class StartSessionResponse(BaseModel):
