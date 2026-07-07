@@ -1,4 +1,5 @@
-from typing import Literal, Optional, List
+from typing import List, Literal, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -53,9 +54,20 @@ class MessageRequest(BaseModel):
     language: Optional[str] = Field(default=None, max_length=50)
 
 
+class QuestionContext(BaseModel):
+    """Sent to the frontend once per session, when the coding problem is first assigned."""
+    id: str
+    title: str
+    difficulty: str
+    constraints: List[str]
+    examples: List[dict]
+    is_stdio: bool
+
+
 class MessageResponse(BaseModel):
     question: str
     done: bool = False
+    question_context: Optional[QuestionContext] = None
 
 
 class BoilerplateResponse(BaseModel):
@@ -68,6 +80,15 @@ class RunCodeRequest(BaseModel):
     version: str = Field(min_length=1, max_length=50)
     source: str = Field(min_length=1, max_length=100_000)
     stdin: Optional[str] = Field(default="", max_length=20_000)
+
+
+class RunCodeJobResponse(BaseModel):
+    job_id: str
+
+
+class CodeJobStatusResponse(BaseModel):
+    status: Literal["pending", "done", "error"]
+    result: Optional[dict] = None
 
 
 class EndSessionRequest(BaseModel):
@@ -89,8 +110,17 @@ class STARAnalysis(BaseModel):
     missing_elements: List[str]
 
 
+class DiagramEvaluation(BaseModel):
+    components_found: List[str]
+    components_missing: List[str]
+    proximity_score: int = Field(ge=0, le=10)
+    proximity_label: Literal["needs work", "reasonable", "strong"]
+    feedback: str
+
+
 class EndSessionResponse(BaseModel):
     overall_score: int
     summary: str
     star_analysis: Optional[STARAnalysis] = None
     evaluations: List[EvaluationCategory]
+    diagram_evaluation: Optional[DiagramEvaluation] = None

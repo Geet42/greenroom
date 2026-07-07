@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 
 import httpx
 
@@ -129,8 +128,9 @@ def _generate(language: str, question: dict) -> dict | None:
         f"function_name: {question['function_name']}\n\nTest cases:\n{tests_preview}"
     )
     try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
         from services.llm import _make_llm
-        from langchain_core.messages import SystemMessage, HumanMessage
         llm = _make_llm(temperature=0.2, max_tokens=3000)
         result = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
         raw = result.content

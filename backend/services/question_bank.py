@@ -88,3 +88,30 @@ def pick_question(
 
 def get_question(question_id: str) -> dict | None:
     return next((q for q in _all_questions() if q.get("id") == question_id), None)
+
+
+def pick_behavioral_question(topic: str | None = None, difficulty: str | list[str] | None = None) -> dict | None:
+    """Random behavioral question, optionally filtered by topic and difficulty."""
+    if difficulty is not None and isinstance(difficulty, str):
+        difficulty = [difficulty]
+    candidates = [
+        q for q in _all_questions()
+        if q.get("track") == "behavioral"
+        and (topic is None or q.get("topic") == topic)
+        and (difficulty is None or (q.get("difficulty") or "medium") in difficulty)
+    ]
+    return random.choice(candidates) if candidates else None
+
+
+def pick_system_design_question(difficulty: str | list[str] | None = None) -> dict | None:
+    """Random system-design question. Includes all difficulties by default (unlike
+    pick_question which excludes hard). None if the bank has no SD questions yet."""
+    if difficulty is not None and isinstance(difficulty, str):
+        difficulty = [difficulty]
+    candidates = [
+        q for q in _all_questions()
+        if q.get("track") == "system-design"
+        and (difficulty is None or (q.get("difficulty") or "medium") in difficulty)
+    ]
+    return random.choice(candidates) if candidates else None
+

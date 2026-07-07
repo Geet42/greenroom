@@ -11,20 +11,20 @@ call is retried against the Ollama-cloud OpenAI-compatible endpoint.
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import re
-import httpx
 from typing import List
 
-from langchain_groq import ChatGroq
+import httpx
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.runnables import RunnableLambda
+from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 
 from services import guardrail
+from services.logger import log
 
 # ── env ──────────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
@@ -139,6 +139,33 @@ TRACK_PERSONAS = {
     ),
 }
 
+DIAGRAM_EVAL_PROMPT = """\
+You are a senior staff engineer reviewing a system design interview.
+
+The candidate was solving this problem: {title}
+
+Expected key components for a good design:
+{expected_components}
+
+Architecture diagrams the candidate drew during the session (serialized from their board):
+{diagram_descriptions}
+
+Evaluate the candidate's diagram:
+1. Which expected components did they include? (list by name, lowercase)
+2. Which expected components are missing or absent?
+3. Proximity score 0-10: 0 = no diagram / completely wrong, 5 = core present but gaps, 10 = thorough and well-connected.
+4. Label: "needs work" (0-3), "reasonable" (4-6), "strong" (7-10).
+5. One sentence of the most important actionable feedback.
+
+Reply ONLY as valid JSON, no markdown fences:
+{{
+  "components_found": ["<string>", ...],
+  "components_missing": ["<string>", ...],
+  "proximity_score": <int 0-10>,
+  "proximity_label": "needs work" | "reasonable" | "strong",
+  "feedback": "<string>"
+}}"""
+
 EVAL_SYSTEM_PROMPT = """\
 You are an expert interview coach analysing a mock {track} interview for a {role} role.
 
@@ -182,24 +209,30 @@ def _history_to_lc(history: list[dict]) -> list:
 
 def opening_message(track: str, role: str) -> str:
     """LLM-generated warm greeting that opens the interview session."""
+    import time
     system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
+    start = time.monotonic()
     try:
-        llm = _make_llm(temperature=0.9, max_tokens=120)
-        result = llm.invoke([
+        llm_client = _make_llm(temperature=0.9, max_tokens=120)
+        result = llm_client.invoke([
             SystemMessage(content=system),
             HumanMessage(content="[The interview session is starting now.]"),
         ])
+        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="groq")
         return result.content.strip()
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-            return _fallback_chat(
+            log.warning("llm.opening.fallback", track=track, error=str(exc))
+            result = _fallback_chat(
                 [
                     {"role": "system", "content": system},
                     {"role": "user",   "content": "[The interview session is starting now.]"},
                 ],
                 max_tokens=120, temperature=0.9,
             )
+            log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="fallback")
+            return result
         raise
 
 
@@ -220,6 +253,24 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
     later test-runner can grade against verified canonical test cases.
     """
     system_prompt = TRACK_PERSONAS.get(track, TRACK_PERSONAS["behavioral"]).format(role=role)
+    if track == "behavioral" and assigned_question:
+        expected = assigned_question.get("expected_elements") or []
+        elements_note = (
+            f" Listen for: {', '.join(expected)}." if expected else ""
+        )
+        system_prompt += (
+            f"\n\nFocus this behavioral session on the following question: "
+            f"\"{assigned_question['prompt']}\"\n\n"
+            f"Present this question naturally once the candidate has introduced themselves, "
+            f"then ask targeted follow-up questions to surface the Situation, Task, Action, "
+            f"and Result in their answer.{elements_note}"
+        )
+    if track == "system-design" and assigned_question:
+        system_prompt += (
+            f"\n\nThe system design problem for this session is: {assigned_question['prompt']}\n\n"
+            "Keep probing the candidate's design choices, component selection, trade-offs, "
+            "and how they would handle scale and failure."
+        )
     if track == "technical" and assigned_question:
         is_stdio = bool(assigned_question.get("tests") and "stdin" in assigned_question["tests"][0])
         io_note = (
@@ -267,8 +318,12 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
                 return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
             raise
 
+    import time as _time
+    _start = _time.monotonic()
     draft = _ask()
-    return guardrail.sanitize(draft, track, regenerate_fn=lambda: _ask(temperature=0.4, corrective=True))
+    result = guardrail.sanitize(draft, track, regenerate_fn=lambda: _ask(temperature=0.4, corrective=True))
+    log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
+    return result
 
 
 def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
@@ -332,3 +387,63 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
             },
             "evaluations": [],
         }
+
+
+def _extract_diagram_descriptions(history: list[dict]) -> str:
+    """Pull [Architecture diagram] blocks from candidate messages."""
+    import re as _re
+    diagrams = []
+    for turn in history:
+        if turn["role"] != "candidate":
+            continue
+        for block in _re.findall(r"\[Architecture diagram\].*?(?=\n\n[A-Z]|\Z)", turn["content"], _re.DOTALL):
+            diagrams.append(block.strip())
+    if not diagrams:
+        return "No architecture diagram was drawn during this session."
+    return "\n\n---\n\n".join(diagrams)
+
+
+def evaluate_diagram(history: list[dict], assigned_question: dict) -> dict:
+    """
+    LLM call that scores the candidate's system-design diagram against the
+    expected_components list on the assigned question.
+    Returns a dict matching the DiagramEvaluation model.
+    """
+    expected = assigned_question.get("expected_components") or []
+    diagrams = _extract_diagram_descriptions(history)
+    prompt = DIAGRAM_EVAL_PROMPT.format(
+        title=assigned_question.get("title", "the assigned problem"),
+        expected_components=", ".join(expected) if expected else "(not specified)",
+        diagram_descriptions=diagrams,
+    )
+
+    _default = {
+        "components_found": [],
+        "components_missing": expected,
+        "proximity_score": 0,
+        "proximity_label": "needs work",
+        "feedback": "No architecture diagram was submitted — draw your design on the board and send it with your answer.",
+    }
+
+    try:
+        llm_client = _make_llm(temperature=0.1, max_tokens=400)
+        llm_json = llm_client.bind(response_format={"type": "json_object"})
+        chain = llm_json | JsonOutputParser()
+        result = chain.invoke([HumanMessage(content=prompt)])
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        return result
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status is None or status == 429 or (isinstance(status, int) and status >= 500):
+            try:
+                raw = _fallback_chat(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=400, temperature=0.1, json_mode=True,
+                )
+                cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
+                cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+                return json.loads(cleaned)
+            except Exception:
+                pass
+        return _default

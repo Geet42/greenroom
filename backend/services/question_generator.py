@@ -115,8 +115,9 @@ async def _run_solution(source: str, inputs: list[str]) -> list[str] | None:
 
 
 def _ask_llm(system: str, user: str, temperature: float, max_tokens: int) -> str:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     from services.llm import _make_llm
-    from langchain_core.messages import SystemMessage, HumanMessage
     llm = _make_llm(temperature=temperature, max_tokens=max_tokens)
     result = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
     return _strip_fences(result.content)

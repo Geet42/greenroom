@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
-import os
 
 
 def _normalize(text: str) -> str:

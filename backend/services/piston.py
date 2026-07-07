@@ -1,7 +1,10 @@
+import os
 import re
 
 import httpx
-import os
+
+from services.logger import log
+from services.retry import with_retry
 
 # Self-hosted Piston (works locally with Docker + --privileged)
 PISTON_URL = os.environ.get("PISTON_URL", "http://localhost:2000/api/v2/execute")
@@ -81,12 +84,39 @@ async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
 
 
 async def run_code(language: str, version: str, source: str, stdin: str = "") -> dict:
-    result = await _piston(language, version, source, stdin)
+    import time
+    start = time.monotonic()
+
+    try:
+        result = await with_retry(
+            lambda: _piston(language, version, source, stdin),
+            attempts=2,
+            base_delay=0.5,
+            label="piston",
+        )
+    except Exception:
+        result = None
+
     if result:
+        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend="piston")
         return result
 
-    result = await _wandbox(language, source, stdin)
+    log.warning("piston.unavailable", language=language, latency_ms=round((time.monotonic() - start) * 1000))
+    wb_start = time.monotonic()
+
+    try:
+        result = await with_retry(
+            lambda: _wandbox(language, source, stdin),
+            attempts=2,
+            base_delay=1.0,
+            label="wandbox",
+        )
+    except Exception:
+        result = None
+
     if result:
+        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - wb_start) * 1000), backend="wandbox")
         return result
 
+    log.error("piston.both_unavailable", language=language)
     return _UNAVAILABLE

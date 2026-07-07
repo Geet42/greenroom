@@ -16,7 +16,7 @@ export default function Results() {
 
     async function load() {
       const [{ data: sessionData }, { data: evalData }, { data: messageData }] = await Promise.all([
-        supabase.from("sessions").select("*").eq("id", sessionId).single(),
+        supabase.from("sessions").select("*, diagram_evaluation").eq("id", sessionId).single(),
         supabase.from("evaluations").select("*").eq("session_id", sessionId),
         supabase
           .from("messages")
@@ -114,6 +114,60 @@ export default function Results() {
                         </ul>
                       </div>
                     )}
+                  </div>
+                );
+              })()}
+
+              {/* Diagram evaluation — system-design sessions only */}
+              {session.diagram_evaluation && (() => {
+                const de = typeof session.diagram_evaluation === "string"
+                  ? JSON.parse(session.diagram_evaluation)
+                  : session.diagram_evaluation;
+                const labelColor = {
+                  "strong": "text-sage",
+                  "reasonable": "text-amber",
+                  "needs work": "text-coral",
+                }[de.proximity_label] ?? "text-mute";
+                return (
+                  <div className="mt-6 rounded-2xl border border-white/10 bg-panel p-6">
+                    <div className="flex items-center justify-between">
+                      <h2 className="font-display text-xl">Architecture Diagram</h2>
+                      <div className="text-right">
+                        <span className={`font-display text-2xl ${labelColor}`}>{de.proximity_score}/10</span>
+                        <p className={`text-xs capitalize ${labelColor}`}>{de.proximity_label}</p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm leading-relaxed text-mute">{de.feedback}</p>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-sage">Components included</p>
+                        {de.components_found?.length > 0 ? (
+                          <ul className="space-y-1">
+                            {de.components_found.map((c, i) => (
+                              <li key={i} className="flex items-center gap-2 text-sm text-cream/80">
+                                <span className="text-sage">✓</span> {c}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-sm text-mute">None detected</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-coral">Components missing</p>
+                        {de.components_missing?.length > 0 ? (
+                          <ul className="space-y-1">
+                            {de.components_missing.map((c, i) => (
+                              <li key={i} className="flex items-center gap-2 text-sm text-cream/80">
+                                <span className="text-coral">✗</span> {c}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-sm text-sage">All expected components included!</p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 );
               })()}

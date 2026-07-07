@@ -7,10 +7,10 @@ Two-step approach:
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import re
-
 
 # ── Step 1: LLM generates test-case data only ────────────────────────────────
 
@@ -50,8 +50,9 @@ def _strip_fences(text: str) -> str:
 
 
 def _generate_cases(problem: str) -> list[dict] | None:
-    from services.llm import _make_llm, _fallback_chat
-    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from services.llm import _fallback_chat, _make_llm
 
     prompt = f"Problem:\n{problem}\n\nReturn the 6 test cases as a JSON array now."
     msgs = [

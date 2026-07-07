@@ -1,14 +1,19 @@
 """
-Lightweight in-memory rate limiter — protects the LLM keys (Groq/Ollama) from
-abuse or runaway client bugs without adding a new infrastructure dependency.
+Rate limiter — sliding window, Postgres-backed.
 
-Known limitation: counters are per-process, so with multiple backend replicas
-(see DEPLOYMENT.md — backend currently allows up to 2) each replica enforces
-its own limit independently, meaning the *effective* ceiling across the fleet
-is (limit × replica count). That's an acceptable trade-off for a POC — the
-goal here is "stop one client from hammering the API," not hard multi-tenant
-quota enforcement. True fleet-wide limiting needs a shared store (Redis
-INCR + EXPIRE is the standard pattern) — noted here for when that's needed.
+Every request inserts one row into rate_limit_events. The check counts rows
+in the trailing 60 seconds for the requesting user. Both backend replicas
+query the same Postgres instance, so the limit is truly per-user across the
+fleet (unlike the previous in-memory deque which gave each replica its own
+independent counter).
+
+Old rows (> 5 minutes) are pruned on each check to prevent unbounded growth.
+No separate cron job is needed — the table stays small because only the
+trailing window matters.
+
+Fallback: if Supabase is not configured (local dev without a DB), the limiter
+falls back to the previous in-memory deque so development still works without
+credentials.
 """
 
 from __future__ import annotations
@@ -20,13 +25,69 @@ from threading import Lock
 from fastapi import HTTPException, status
 
 _WINDOW_SECONDS = 60
+_PRUNE_AFTER_SECONDS = 300
+
+
+def check_rate_limit(key: str, max_per_minute: int = 30) -> None:
+    """Raises HTTP 429 if `key` has exceeded max_per_minute requests in the
+    trailing 60 seconds. Uses Postgres when available, falls back to an
+    in-memory deque for local dev without a configured database."""
+    from services.supabase_client import get_supabase  # local import avoids circular dep
+
+    sb = get_supabase()
+    if sb:
+        try:
+            _check_postgres(sb, key, max_per_minute)
+        except HTTPException:
+            raise
+        except Exception:
+            _check_memory(key, max_per_minute)
+    else:
+        _check_memory(key, max_per_minute)
+
+
+# ── Postgres implementation ───────────────────────────────────────────────────
+
+def _check_postgres(sb, key: str, max_per_minute: int) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(seconds=_WINDOW_SECONDS)
+    prune_before = now - timedelta(seconds=_PRUNE_AFTER_SECONDS)
+
+    # Count requests in the trailing window
+    result = (
+        sb.table("rate_limit_events")
+        .select("id", count="exact")
+        .eq("user_id", key)
+        .gte("ts", window_start.isoformat())
+        .execute()
+    )
+    count = result.count or 0
+
+    if count >= max_per_minute:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests — please slow down and try again shortly.",
+        )
+
+    # Record this request
+    sb.table("rate_limit_events").insert({"user_id": key, "ts": now.isoformat()}).execute()
+
+    # Prune old rows (fire-and-forget; failure is acceptable)
+    try:
+        sb.table("rate_limit_events").delete().lt("ts", prune_before.isoformat()).execute()
+    except Exception:
+        pass
+
+
+# ── In-memory fallback (local dev only) ──────────────────────────────────────
+
 _buckets: dict[str, deque] = defaultdict(deque)
 _lock = Lock()
 
 
-def check_rate_limit(key: str, max_per_minute: int = 30) -> None:
-    """Raises HTTP 429 if `key` (typically a user id) has exceeded max_per_minute
-    requests in the trailing 60 seconds."""
+def _check_memory(key: str, max_per_minute: int) -> None:
     now = time.monotonic()
     with _lock:
         bucket = _buckets[key]

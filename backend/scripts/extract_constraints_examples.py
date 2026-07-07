@@ -27,8 +27,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from services.llm import _make_llm, _fallback_chat  # noqa: E402
-from langchain_core.messages import SystemMessage, HumanMessage  # noqa: E402
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
+
+from services.llm import _fallback_chat, _make_llm  # noqa: E402
 
 _BANK_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "question_bank.json")
 
