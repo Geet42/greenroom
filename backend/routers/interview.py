@@ -70,6 +70,7 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "assigned_question": None,
         "next_sequence_no": 1,
         "last_activity_at": now(),
+        "job_description": req.job_description or None,
     }
 
     await run_in_threadpool(
@@ -121,7 +122,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
 
         question = await run_in_threadpool(
             llm.next_question, session["track"], session["role"], session["history"],
-            session.get("assigned_question"),
+            session.get("assigned_question"), session.get("job_description"),
         )
 
         session["history"].append({"role": "interviewer", "content": question})

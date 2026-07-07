@@ -95,7 +95,9 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) { navigate("/login", { replace: true }); return; }
-        const res = await api.startSession({ track, role: "Software Engineer" });
+        const jd = sessionStorage.getItem("interview_jd") || undefined;
+        sessionStorage.removeItem("interview_jd");
+        const res = await api.startSession({ track, role: "Software Engineer", job_description: jd });
         setSessionId(res.session_id);
         setMessages([{ role: "interviewer", text: res.question }]);
         speakIfUnmuted(res.question);
@@ -116,7 +118,30 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleStartRecording = () => { setAnswerText(""); reset(); start(); };
+  const handleStartRecording = useCallback(() => { setAnswerText(""); reset(); start(); }, [reset, start]);
+
+  // Spacebar push-to-talk: hold to record, release to stop
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      if (!isListening && isSupported) handleStartRecording();
+    };
+    const onKeyUp = (e) => {
+      if (e.code !== "Space") return;
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (isListening) stop();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [isListening, isSupported, handleStartRecording, stop]);
 
   /**
    * Send a candidate message.

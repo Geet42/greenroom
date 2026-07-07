@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { supabase } from "../lib/supabaseClient";
@@ -27,7 +27,21 @@ const TRACKS = [
 ];
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState([]);
+  const [selectedTrack, setSelectedTrack] = useState(null);
+  const [jobDescription, setJobDescription] = useState("");
+  const jdRef = useRef(null);
+
+  useEffect(() => {
+    if (selectedTrack) jdRef.current?.focus();
+  }, [selectedTrack]);
+
+  const handleStartSession = () => {
+    if (jobDescription.trim()) sessionStorage.setItem("interview_jd", jobDescription.trim());
+    else sessionStorage.removeItem("interview_jd");
+    navigate(`/interview?track=${selectedTrack}`);
+  };
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [deletingId, setDeletingId] = useState(null);
@@ -87,19 +101,64 @@ export default function Dashboard() {
 
           <div className="mt-10 grid gap-6 sm:grid-cols-3">
             {TRACKS.map((track) => (
-              <Link
+              <button
                 key={track.id}
-                to={`/interview?track=${track.id}`}
-                className="rounded-2xl border border-white/10 bg-panel p-6 transition hover:border-amber/40"
+                onClick={() => { setSelectedTrack(track.id); setJobDescription(""); }}
+                className="rounded-2xl border border-white/10 bg-panel p-6 text-left transition hover:border-amber/40"
               >
                 <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${track.accent}`}>
                   {track.name}
                 </span>
                 <p className="mt-4 text-sm text-mute">{track.description}</p>
                 <span className="mt-6 inline-block text-sm text-amber">Start session &rarr;</span>
-              </Link>
+              </button>
             ))}
           </div>
+
+          {selectedTrack && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+              onClick={(e) => { if (e.target === e.currentTarget) setSelectedTrack(null); }}
+            >
+              <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-panel p-6 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-display text-xl">
+                    {TRACKS.find((t) => t.id === selectedTrack)?.name} interview
+                  </h2>
+                  <button onClick={() => setSelectedTrack(null)} className="text-mute hover:text-cream">✕</button>
+                </div>
+                <p className="mt-1 text-sm text-mute">
+                  Paste a job description to tailor questions to the role — or leave blank for a general interview.
+                </p>
+                <textarea
+                  ref={jdRef}
+                  value={jobDescription}
+                  onChange={(e) => setJobDescription(e.target.value)}
+                  placeholder="Paste job description here (optional)..."
+                  rows={7}
+                  maxLength={5000}
+                  className="mt-4 w-full resize-none rounded-xl border border-white/10 bg-panelLight/40 px-4 py-3 text-sm text-cream outline-none placeholder:text-mute/50 focus:border-amber/40"
+                />
+                {jobDescription.length > 0 && (
+                  <p className="mt-1 text-right text-xs text-mute">{jobDescription.length} / 5000</p>
+                )}
+                <div className="mt-4 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setSelectedTrack(null)}
+                    className="rounded-full border border-white/10 px-4 py-2 text-sm text-mute transition hover:text-cream"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleStartSession}
+                    className="rounded-full bg-amber px-5 py-2 text-sm font-medium text-ink transition hover:bg-amberDark"
+                  >
+                    Start session
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="mt-16">
             <h2 className="font-display text-2xl tracking-tight">Recent sessions</h2>

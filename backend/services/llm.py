@@ -236,7 +236,7 @@ def opening_message(track: str, role: str) -> str:
         raise
 
 
-def next_question(track: str, role: str, history: list[dict], assigned_question: dict | None = None) -> str:
+def next_question(track: str, role: str, history: list[dict], assigned_question: dict | None = None, job_description: str | None = None) -> str:
     """
     LangChain LCEL interview chain:
       ChatPromptTemplate(system + history + latest human turn)
@@ -253,6 +253,8 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
     later test-runner can grade against verified canonical test cases.
     """
     system_prompt = TRACK_PERSONAS.get(track, TRACK_PERSONAS["behavioral"]).format(role=role)
+    if job_description:
+        system_prompt += f"\n\n[Job description the candidate is interviewing for]\n{job_description.strip()}"
     if track == "behavioral" and assigned_question:
         expected = assigned_question.get("expected_elements") or []
         elements_note = (
