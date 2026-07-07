@@ -125,6 +125,9 @@ export default function Interview() {
                 >
                   {session.isListening ? "Stop recording" : "Record answer"}
                 </button>
+                {session.isSupported && !session.isListening && (
+                  <span className="text-xs text-mute">Hold Space to record</span>
+                )}
                 <button
                   onClick={() =>
                     session.handleSend(

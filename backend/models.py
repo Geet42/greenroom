@@ -7,6 +7,7 @@ class StartSessionRequest(BaseModel):
     track: Literal["behavioral", "technical", "system-design"]
     role: str = Field(default="Software Engineer", min_length=1, max_length=100)
     user_id: Optional[str] = None
+    job_description: Optional[str] = Field(default=None, max_length=5000)
 
 
 class VisibleTestResult(BaseModel):
