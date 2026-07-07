@@ -12,7 +12,7 @@ describe("api module surface", () => {
     import.meta.env.VITE_SUPABASE_ANON_KEY = "anon-key-test";
 
     // Dynamically import to pick up the stubbed env
-    const { api } = await import("../lib/api.js");
+    const { api } = await import("../lib/api.ts");
 
     const required = [
       "startSession",
