@@ -1,4 +1,4 @@
-# Greenroom — Technical Design Document
+# Greenroom: Technical Design Document
 
 **Authors:** Vishwajeet, Geet, Anurag, Nithin, Mahati, Yuang
 **Version:** 4.0 · July 2026
@@ -19,7 +19,7 @@ Students and early-career candidates have no free, realistic way to practice int
 | Static Q&A tools | No adaptive follow-up, no voice, no live coding |
 | General AI chatbots | No interview structure, no scoring rubric, no STAR evaluation |
 
-Greenroom fills this gap: an AI-driven interview platform that speaks out loud, runs code live, scores system-design diagrams, and delivers a structured STAR evaluation — at zero cost to the candidate.
+Greenroom fills this gap: an AI-driven interview platform that speaks out loud, runs code live, scores system-design diagrams, and delivers a structured STAR evaluation at zero cost to the candidate.
 
 ### 1.2 Goals
 
@@ -42,13 +42,13 @@ Greenroom fills this gap: an AI-driven interview platform that speaks out loud, 
 
 ## 2. Architecture
 
-Greenroom is a three-service web application. The candidate interacts through a browser. The backend handles all intelligence — LLM calls, code execution, evaluation, and session management. Supabase provides authentication and persistent storage.
+Greenroom is a three-service web application. The candidate interacts through a browser. The backend handles all intelligence: LLM calls, code execution, evaluation, and session management. Supabase provides authentication and persistent storage.
 
 ### 2.1 System Architecture
 
 ![System Architecture](docs/diagrams/architecture.png)
 
-> **Color guide:** Blue = core services · Green = Azure backend · Yellow = guardrail / LLM providers · Orange = external execution & TTS · Red = Piston sandbox (internal only) · Purple = CI/CD
+> **Color guide:** Blue = core services, Green = Azure backend, Yellow = guardrail / LLM providers, Orange = external execution and TTS, Red = Piston sandbox (internal only), Purple = CI/CD
 
 ### 2.2 User Flow
 
@@ -62,11 +62,11 @@ Greenroom is a three-service web application. The candidate interacts through a 
 
 A complete session moves through the following steps:
 
-1. **Authentication.** The candidate logs in via email/password. Supabase handles PKCE flow — no credentials touch the backend code. The browser receives a JWT.
+1. **Authentication.** The candidate logs in via email/password. Supabase handles PKCE flow and no credentials touch the backend code. The browser receives a JWT.
 
 2. **Session start.** The frontend sends `POST /api/interview/start` with a Bearer JWT. The backend validates the token server-side against Supabase, enforces the session concurrency cap (max 3 active per user), generates an opening greeting via the LLM, and returns `{session_id, question}`.
 
-3. **Interview loop.** On each turn the candidate speaks or types a reply; the frontend sends `POST /api/interview/message`. The backend checks the idle timeout (30 min → 410), assigns a question from the bank on the first reply (lazy assignment), calls the LLM, passes the response through the guardrail filter, and returns the interviewer's next question as text. The frontend speaks the reply via the TTS endpoint.
+3. **Interview loop.** On each turn the candidate speaks or types a reply; the frontend sends `POST /api/interview/message`. The backend checks the idle timeout (30 min, 410), assigns a question from the bank on the first reply (lazy assignment), calls the LLM, passes the response through the guardrail filter, and returns the interviewer's next question as text. The frontend speaks the reply via the TTS endpoint.
 
 4. **Technical track.** The candidate writes code in a Monaco editor. `POST /api/interview/code/run` enqueues execution and returns a `job_id` immediately; the frontend polls `GET /api/interview/code/job/{id}`. For Java/C++, a test harness is generated on first request via the LLM, verified in the sandbox, and cached. `POST /api/interview/code/test` runs the harness and returns per-case results.
 
@@ -86,7 +86,7 @@ All LLM interactions use LangChain Expression Language rather than plain API cal
 |---|---|---|
 | Conversation memory | Single turn only | Full typed history injected automatically |
 | Output validation | None | Pydantic schema enforced at parse time |
-| Provider swap | Rewrite every call site | One line — `ChatGroq(...)` → `ChatOpenAI(...)` |
+| Provider swap | Rewrite every call site | One line: `ChatGroq(...)` to `ChatOpenAI(...)` |
 | LLM fallback | None | Auto-retry on Ollama Cloud on 429 / 5xx |
 
 ### Lazy question assignment
@@ -94,14 +94,14 @@ All LLM interactions use LangChain Expression Language rather than plain API cal
 Questions are assigned on the first candidate message, not when the session starts. This allows the LLM to use the candidate's self-introduction to select the most contextually appropriate question from the bank. The assignment is persisted to Supabase and injected into every subsequent LLM call.
 
 ```
-POST /interview/start        →  greeting only; assigned_question = null
-POST /interview/message (1)  →  pick_question(track, intro) → inject into system prompt
-POST /interview/message (2+) →  question already present in session state
+POST /interview/start        ->  greeting only; assigned_question = null
+POST /interview/message (1)  ->  pick_question(track, intro) -> inject into system prompt
+POST /interview/message (2+) ->  question already present in session state
 ```
 
 ### Postgres-backed rate limiter
 
-The rate limiter uses a `rate_limit_events` table in Supabase — one row per request, pruned after five minutes. Every backend replica queries the same Postgres instance, so the limit is truly per-user across the fleet. It falls back to an in-memory deque if the table does not exist, with a try/except guard so a missing migration never crashes the backend.
+The rate limiter uses a `rate_limit_events` table in Supabase, with one row per request pruned after five minutes. Every backend replica queries the same Postgres instance, so the limit is truly per-user across the fleet. It falls back to an in-memory deque if the table does not exist, with a try/except guard so a missing migration never crashes the backend.
 
 | Dimension | In-memory | Postgres-backed |
 |---|---|---|
@@ -113,29 +113,29 @@ The rate limiter uses a `rate_limit_events` table in Supabase — one row per re
 
 Two independent session-level guards in `session_guard.py`:
 
-- **Concurrency cap** — `check_session_limit()` counts `sessions WHERE status='active' AND user_id=?`. Returns HTTP 429 if ≥ 3. Configurable via `MAX_ACTIVE_SESSIONS`.
-- **Idle timeout** — `check_idle_timeout()` compares `last_activity_at` against `now()`. Returns HTTP 410 if > 30 minutes idle. Configurable via `SESSION_IDLE_TIMEOUT_MINUTES`.
+- **Concurrency cap:** `check_session_limit()` counts `sessions WHERE status='active' AND user_id=?`. Returns HTTP 429 if >= 3. Configurable via `MAX_ACTIVE_SESSIONS`.
+- **Idle timeout:** `check_idle_timeout()` compares `last_activity_at` against `now()`. Returns HTTP 410 if > 30 minutes idle. Configurable via `SESSION_IDLE_TIMEOUT_MINUTES`.
 
 Both run on every `/message` call after JWT validation, before the LLM call.
 
 ### Self-hosted Piston with Wandbox fallback
 
-The public Piston API requires authentication. Piston is self-hosted as an internal Azure Container App — no public internet ingress, only the backend API can reach it. Wandbox is wired as a transparent fallback; responses are normalised to Piston's response shape so no other layer knows which tier handled the request.
+The public Piston API requires authentication. Piston is self-hosted as an internal Azure Container App with no public internet ingress; only the backend API can reach it. Wandbox is wired as a transparent fallback; responses are normalised to Piston's response shape so no other layer knows which tier handled the request.
 
 ```
 POST /api/interview/code/run
-  → Tier 1: Self-hosted Piston  (internal Container App)
-      if unavailable → fall through
-  → Tier 2: Wandbox  (public API, no auth)
-      if unavailable → fall through
-  → Tier 3: "Temporarily unavailable" message to candidate
+  -> Tier 1: Self-hosted Piston  (internal Container App)
+      if unavailable -> fall through
+  -> Tier 2: Wandbox  (public API, no auth)
+      if unavailable -> fall through
+  -> Tier 3: "Temporarily unavailable" message to candidate
 ```
 
 ### Async code execution job queue
 
 Code execution is decoupled from the HTTP request cycle. `POST /code/run` enqueues the job via FastAPI `BackgroundTasks` and returns `{job_id}` immediately. The frontend polls `GET /code/job/{id}` until `status` is `done` or `error`. This prevents long compilations from holding HTTP connections open and avoids Azure gateway timeouts.
 
-### Dynamic test runner — two modes
+### Dynamic test runner: two modes
 
 The test runner handles both problem formats present in the question bank:
 
@@ -143,26 +143,26 @@ The test runner handles both problem formats present in the question bank:
   ```json
   [{"call": "two_sum([2,7,11,15], 9)", "expected": "[0, 1]"}]
   ```
-- **stdin/stdout** (Codeforces-style): The candidate's raw source is the program. Each test case provides `stdin`; stdout is compared against expected output. All languages Piston supports are valid — no whitelist.
+- **stdin/stdout** (Codeforces-style): The candidate's raw source is the program. Each test case provides `stdin`; stdout is compared against expected output. All languages Piston supports are valid with no whitelist.
 
 ### Lazy harness generation for Java and C++
 
-Java and C++ require a full compilable harness — imports, main, type-safe assertions. On first request the backend prompts the LLM to generate three sections (boilerplate, reference solution, test harness), runs the reference solution through the sandbox to verify all test cases pass, then caches the result under `questions.harnesses[language]` in Supabase. Subsequent requests for the same problem and language hit the cache immediately. If verification fails the harness is not cached, and the response is marked `error_type: "transient"` so the frontend suggests retrying.
+Java and C++ require a full compilable harness: imports, main, type-safe assertions. On first request the backend prompts the LLM to generate three sections (boilerplate, reference solution, test harness), runs the reference solution through the sandbox to verify all test cases pass, then caches the result under `questions.harnesses[language]` in Supabase. Subsequent requests for the same problem and language hit the cache immediately. If verification fails the harness is not cached, and the response is marked `error_type: "transient"` so the frontend suggests retrying.
 
 ### Four-layer guardrail against answer leaks
 
 The AI interviewer must never reveal the answer or optimal complexity. Four independent layers enforce this:
 
-1. **Prompt hardening** — Track personas explicitly forbid stating time/space complexity or recommending specific algorithms.
-2. **Regex detection** — Patterns catch common leak signals the model still produces (e.g. "O(n)", "time complexity is", "you should use a hashmap").
-3. **Regeneration** — On detection, the response is regenerated with a corrective instruction: "your previous draft leaked the answer — rewrite it so it only asks a question."
-4. **Safe fallback** — If the regenerated response still leaks, a pre-written safe question replaces it entirely.
+1. **Prompt hardening:** Track personas explicitly forbid stating time/space complexity or recommending specific algorithms.
+2. **Regex detection:** Patterns catch common leak signals the model still produces (e.g. "O(n)", "time complexity is", "you should use a hashmap").
+3. **Regeneration:** On detection, the response is regenerated with a corrective instruction: "your previous draft leaked the answer, rewrite it so it only asks a question."
+4. **Safe fallback:** If the regenerated response still leaks, a pre-written safe question replaces it entirely.
 
-### JWT + RLS — three ownership verification layers
+### JWT + RLS: three ownership verification layers
 
 Every request passes through three independent ownership verifications:
 
-1. `auth.py` validates the JWT via `supabase.auth.get_user(token)` — always server-side, never decoded locally.
+1. `auth.py` validates the JWT via `supabase.auth.get_user(token)`, always server-side, never decoded locally.
 2. `check_ownership()` in `session_guard.py` compares `session.user_id` against the authenticated user's ID.
 3. Postgres RLS policies enforce the same ownership rule independently at the database level.
 
@@ -170,11 +170,11 @@ Even if application code contained a bug, the database would not return another 
 
 ### Two-key architecture
 
-The frontend holds only the Supabase **anon key** (safe to expose — used for PKCE login). The backend holds the **service-role key** (secret, injected via environment variable at deploy time, never sent to the browser). The service-role key bypasses RLS so the backend can write on behalf of any user, but it is never exposed outside the server process.
+The frontend holds only the Supabase **anon key** (safe to expose, used for PKCE login). The backend holds the **service-role key** (secret, injected via environment variable at deploy time, never sent to the browser). The service-role key bypasses RLS so the backend can write on behalf of any user, but it is never exposed outside the server process.
 
-### Diagram evaluation — system-design track
+### Diagram evaluation: system-design track
 
-When a system-design session ends, `llm.evaluate_diagram()` scores the candidate's Excalidraw canvas against the `expected_components` list on the assigned question. The LLM returns structured JSON: components found, components missing, proximity score (0–10), label, and one-sentence feedback. The Results page renders this as a dedicated Architecture Diagram card with a colour-coded component checklist.
+When a system-design session ends, `llm.evaluate_diagram()` scores the candidate's Excalidraw canvas against the `expected_components` list on the assigned question. The LLM returns structured JSON: components found, components missing, proximity score (0-10), label, and one-sentence feedback. The Results page renders this as a dedicated Architecture Diagram card with a colour-coded component checklist.
 
 ---
 
@@ -182,89 +182,50 @@ When a system-design session ends, `llm.evaluate_diagram()` scores the candidate
 
 ### Implemented
 
-- **Behavioral track** — multi-turn STAR-format Q&A with TTS voice; question assigned from the bank on first reply via `pick_behavioral_question()`
-- **Technical track** — Monaco editor, async code execution (Python, JS, Java, C++), dynamic test runner (call/expected + stdin/stdout), lazy Java/C++ harness generation, constraints panel, all languages supported for stdio problems
-- **System Design track** — Excalidraw canvas with real-time serialisation; diagram scoring at session end against `expected_components`
-- **Session management** — concurrency cap (max 3, HTTP 429), idle timeout (30 min, HTTP 410), session history and delete
-- **Question bank** — 357 questions total:
+- **Behavioral track:** multi-turn STAR-format Q&A with TTS voice; question assigned from the bank on first reply via `pick_behavioral_question()`
+- **Technical track:** Monaco editor, async code execution (Python, JS, Java, C++), dynamic test runner (call/expected + stdin/stdout), lazy Java/C++ harness generation, constraints panel, all languages supported for stdio problems
+- **System Design track:** Excalidraw canvas with real-time serialisation; diagram scoring at session end against `expected_components`
+- **Session management:** concurrency cap (max 3, HTTP 429), idle timeout (30 min, HTTP 410), session history and delete
+- **Question bank:** 357 questions total:
   - 295 technical: LeetCodeDataset (Kaggle / newfacade, MIT) + CodeContests (DeepMind, CC-BY-4.0) + 8 hand-written; all constraints filled
   - 42 behavioral: `ashishps1/awesome-behavioral-interviews`; each with `expected_elements` (STAR components)
   - 20 system-design: `donnemartin/system-design-primer`; each with `expected_components` for diagram scoring
-- **LLM pipeline** — Groq (Llama 3.3 70B) primary → Ollama Cloud fallback; LangChain LCEL chains; four-layer guardrail
-- **Code execution** — self-hosted Piston (internal) → Wandbox fallback; async job queue
-- **Auth** — Supabase email/password + PKCE OAuth; JWT validated server-side on every request; Postgres RLS
-- **Rate limiter** — Postgres sliding-window (30 req/min standard, 20 req/min code), in-memory fallback
-- **Observability** — structured JSON logging via `structlog`; GitHub Actions CI/CD (lint, type-check, pytest, Vitest)
-
-### Not yet implemented
-
-- Seniority levels (Entry / Senior) and expanded role selector
-- LLM response streaming (Server-Sent Events)
-- Shared session store (Redis) across replicas
-- Evaluation accuracy benchmark against human raters
-- Sentry error tracking
+- **LLM pipeline:** Groq (Llama 3.3 70B) primary with Ollama Cloud fallback; LangChain LCEL chains; four-layer guardrail
+- **Code execution:** self-hosted Piston (internal) with Wandbox fallback; async job queue
+- **Auth:** Supabase email/password + PKCE OAuth; JWT validated server-side on every request; Postgres RLS
+- **Rate limiter:** Postgres sliding-window (30 req/min standard, 20 req/min code), in-memory fallback
+- **Observability:** structured JSON logging via `structlog`; GitHub Actions CI/CD (lint, type-check, pytest, Vitest)
 
 ### Known infrastructure constraints
 
-- **Piston sandbox** — Azure Container Apps free consumption plan blocks `--privileged` Docker mode, which Piston's `isolate` sandbox requires for full namespace-based process isolation. Wandbox handles fallback execution. Full isolation requires a dedicated D4 workload profile (~$50/month) or replacing isolate with gVisor/nsjail.
-- **Supabase free tier** — 500 MB storage, 2 connections/second ceiling.
-- **Web Speech API** — browser speech recognition only works in Chrome and Edge, and requires HTTPS in production.
+- **Piston sandbox:** Azure Container Apps free consumption plan blocks `--privileged` Docker mode, which Piston's `isolate` sandbox requires for full namespace-based process isolation. Wandbox handles fallback execution. Full isolation requires a dedicated D4 workload profile (~$50/month) or replacing isolate with gVisor/nsjail.
+- **Supabase free tier:** 500 MB storage, 2 connections/second ceiling.
+- **Web Speech API:** browser speech recognition only works in Chrome and Edge, and requires HTTPS in production.
 
 ---
 
-## 5. Known Limitations
-
-### Cross-replica session state
-
-The in-memory `SESSIONS` dict is per-process. With 2 backend replicas, a session created on replica A is invisible to replica B. If Azure routes a follow-up request to the other replica, `get_session()` returns `None` and the candidate receives a 404.
-
-**Resolution:** Replace `SESSIONS` with a shared store. Redis (`Azure Cache for Redis`) is the standard approach. The `session_store.py` module is already isolated; the backing store is a single-file change. Azure Container Apps sticky sessions (`--sticky-sessions`) are an available interim mitigation.
-
-### LLM latency at scale
-
-Every `/message` call blocks on a synchronous Groq API round-trip (1–3 s). At 10 concurrent sessions this is acceptable; at 100 it queues.
-
-**Resolution:** Stream the LLM response token-by-token (`ChatGroq(..., streaming=True)`) and use Server-Sent Events on the frontend. This would also allow the candidate to see the interviewer "typing" in real time.
-
-### Piston single-replica ceiling
-
-Piston is a single container capped at 1.0 vCPU. Under load, code execution jobs queue behind one another.
-
-**Resolution:** Scale Piston to 2–3 replicas and add retry-with-backoff in `piston.py`. Wandbox fallback provides a natural overflow path in the meantime.
-
-### Rate limiter per-user, not per-session
-
-The current rate limit (30 req/min) applies per user, not per session. A user with 3 active sessions can effectively triple their request rate. Additionally, the `rate_limit_events` table prune query runs synchronously on every request, adding latency to the hot path.
-
-**Resolution:**
-- Account for active sessions in the rate budget (divide allowance by session count)
-- Move the prune to FastAPI `BackgroundTasks` so it runs off the critical path
-- Add `GET /api/rate-limit/status` so the frontend can surface remaining allowance
-
----
-
-## 6. Security
+## 5. Security
 
 **Controls in place:**
 
-- Every request validated server-side via `supabase.auth.get_user(token)` — JWT never decoded locally
+- Every request validated server-side via `supabase.auth.get_user(token)`; JWT never decoded locally
 - Session ownership checked in application code (`check_ownership`) and independently enforced by Postgres RLS policies
 - All inputs validated by Pydantic before any business logic runs: 100 KB max source code, 20 KB max message, 2,000 chars max TTS text, 50 chars max language/version strings
-- No SQL injection surface — all database queries use the Supabase SDK's parameterized methods
-- Secrets only in environment variables — confirmed by code grep and CI fitness function; nothing hardcoded
+- No SQL injection surface; all database queries use the Supabase SDK's parameterized methods
+- Secrets only in environment variables, confirmed by code grep and CI fitness function; nothing hardcoded
 - CORS locked to the deployed frontend origin via `ALLOWED_ORIGINS`
-- Piston has internal-only ingress — not reachable from the internet; only the backend container can call it
+- Piston has internal-only ingress, not reachable from the internet; only the backend container can call it
 - Four-layer guardrail prevents the LLM from leaking problem answers or optimal solutions
-- CI/CD uses OIDC federated identity — no Azure credentials stored as repository secrets
+- CI/CD uses OIDC federated identity; no Azure credentials stored as repository secrets
 - Architecture fitness function in CI checks: frontend never imports `SERVICE_ROLE_KEY`; every session endpoint calls `check_ownership`
 
-**Known gap — Piston sandbox isolation:**
+**Known gap: Piston sandbox isolation**
 
 Piston's `isolate` backend requires `--privileged` Docker mode for full namespace-based process isolation, which Azure Container Apps free tier blocks. In practice, Wandbox handles the majority of code execution on its own isolated infrastructure. For a production fix: replace `isolate` with gVisor or nsjail (neither requires `--privileged`), or upgrade to an ACA dedicated D4 workload profile.
 
 ---
 
-## 7. Testing & Observability
+## 6. Testing and Observability
 
 ### Testing
 
@@ -273,32 +234,32 @@ Piston's `isolate` backend requires `--privileged` Docker mode for full namespac
 | `pytest` unit tests | Guardrail logic, Pydantic model validation, rate limiter behaviour |
 | Architecture fitness functions | Frontend never imports `SERVICE_ROLE_KEY`; `supabaseClient` does not reference service-role credentials |
 | `Vitest` frontend tests | API module surface contracts; security boundary check |
-| CI gate | Lint (ruff), type-check, pytest, Vitest — Docker build blocked until all pass |
+| CI gate | Lint (ruff), type-check, pytest, Vitest; Docker build blocked until all pass |
 
 Planned additions: `httpx.AsyncClient` integration tests covering endpoint ownership checks, rate limiter boundaries, and Pydantic validation edge cases; expanded Vitest coverage for hooks and components.
 
 ### Observability
 
-Current: structured JSON logging via `structlog` per LLM call — track, latency_ms, provider (groq/fallback).
+Current: structured JSON logging via `structlog` per LLM call, capturing track, latency_ms, and provider (groq/fallback).
 
 Planned additions:
 
-- Per-request log: endpoint, latency, LLM provider, execution tier, error type — no tokens, message content, or source code logged
+- Per-request log: endpoint, latency, LLM provider, execution tier, error type; no tokens, message content, or source code logged
 - Sentry free tier for error tracking
 - Key metrics via Azure Log Analytics: session completion rate, LLM fallback rate, Piston vs Wandbox split, guardrail trigger rate, p95 latency on `/interview/message` and `/interview/code/test`
 
-**Privacy:** Candidates can delete all session data at any time via `DELETE /api/interview/{id}`. When Piston is unavailable, source code is sent to Wandbox — this is disclosed. No PII is logged.
+**Privacy:** Candidates can delete all session data at any time via `DELETE /api/interview/{id}`. When Piston is unavailable, source code is sent to Wandbox; this is disclosed. No PII is logged.
 
 ---
 
-## 8. Deployment
+## 7. Deployment
 
 ### Service URLs
 
 ```
 Frontend   https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
 API        https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io
-Piston     http://greenroom-piston.internal  (internal only — no public ingress)
+Piston     http://greenroom-piston.internal  (internal only, no public ingress)
 ```
 
 ### CI/CD Pipeline
@@ -308,7 +269,7 @@ Every push to `main` that touches `backend/` or `piston/` triggers `.github/work
 1. CI gate: lint (ruff), type-check, pytest, Vitest
 2. Docker Buildx builds images targeting `linux/amd64`
 3. Images pushed to GitHub Container Registry (`ghcr.io`) tagged with commit SHA and `latest`
-4. Azure authentication via OIDC federated identity — no credentials stored in GitHub
+4. Azure authentication via OIDC federated identity; no credentials stored in GitHub
 5. Container Apps updated via `az containerapp update` pointing to the new image tag
 
 The frontend is deployed separately via its own workflow.
@@ -336,8 +297,8 @@ az containerapp update \
 GROQ_API_KEY=                          # https://console.groq.com/keys
 GROQ_MODEL=llama-3.3-70b-versatile
 SUPABASE_URL=https://...
-SUPABASE_SERVICE_ROLE_KEY=...          # Server-only — never expose to frontend
-FALLBACK_BASE_URL=https://api.ollama.ai/v1   # Optional — Ollama Cloud
+SUPABASE_SERVICE_ROLE_KEY=...          # Server-only, never expose to frontend
+FALLBACK_BASE_URL=https://api.ollama.ai/v1   # Optional, Ollama Cloud
 FALLBACK_API_KEY=...                   # Optional
 FALLBACK_MODEL=llama3.3:70b            # Optional
 ALLOWED_ORIGINS=https://greenroom-frontend...azurecontainerapps.io
@@ -348,13 +309,13 @@ SESSION_IDLE_TIMEOUT_MINUTES=30        # Default: 30
 **Frontend:**
 ```
 VITE_SUPABASE_URL=https://...
-VITE_SUPABASE_ANON_KEY=...             # Public key — safe to expose
+VITE_SUPABASE_ANON_KEY=...             # Public key, safe to expose
 VITE_API_URL=/api
 ```
 
 ---
 
-## 9. Open Risks
+## 8. Open Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -362,16 +323,16 @@ VITE_API_URL=/api
 | Groq rate-limited during peak usage | Ollama Cloud fallback implemented and tested |
 | LLM returns invalid JSON despite json_mode | `JsonOutputParser` + safe default evaluation object on parse failure |
 | Wandbox unavailable | "Temporarily unavailable" message; session continues without code execution |
-| Cross-replica session miss | Sticky sessions as interim; Redis as proper resolution (see §5) |
+| Cross-replica session miss | Sticky sessions as interim; Redis as proper resolution |
 | Session state lost on backend restart | In-memory `SESSIONS` cache; Redis resolves permanently |
 | Java/C++ harness generation slow on first use | Loading hint shown after 5 s; `error_type: transient` returned so candidate can retry |
 | Web Speech API incompatible on Safari / Firefox | Documented requirement: Chrome or Edge + HTTPS |
-| Supabase free tier connection ceiling | Batching or upgraded plan (see §5) |
+| Supabase free tier connection ceiling | Batching or upgraded plan |
 | Question bank licensing | Only public datasets with explicit licences; no scraping |
 
 ---
 
-## 10. References
+## 9. References
 
 | Resource | Link |
 |---|---|
@@ -399,17 +360,17 @@ backend/
   auth.py                    # JWT extraction via Supabase, returns AuthenticatedUser
   models.py                  # Pydantic request/response schemas with field constraints
   routers/
-    interview.py             # All interview endpoints — start, message, code/run, code/test, boilerplate, end, delete
+    interview.py             # All interview endpoints: start, message, code/run, code/test, boilerplate, end, delete
     tts.py                   # TTS endpoint
   services/
     llm.py                   # LangChain LCEL chains: opening_message, next_question, evaluate_session, evaluate_diagram
-    piston.py                # run_code(): Piston primary → Wandbox fallback
-    rate_limit.py            # Sliding-window per-user rate limiter — Postgres primary, in-memory fallback
+    piston.py                # run_code(): Piston primary -> Wandbox fallback
+    rate_limit.py            # Sliding-window per-user rate limiter: Postgres primary, in-memory fallback
     session_store.py         # In-memory SESSIONS dict with asyncio lock and idle eviction
     session_guard.py         # check_ownership, check_session_limit (max 3), check_idle_timeout (30 min)
     persistence.py           # Supabase writes: session start, messages, assigned_question, evaluation
     job_store.py             # Async code execution job queue with TTL eviction
-    question_bank.py         # 357 questions — Supabase-first load with local JSON seed fallback
+    question_bank.py         # 357 questions: Supabase-first load with local JSON seed fallback
     question_generator.py    # LLM selects existing or generates new problem with dual-solution verification
     test_runner.py           # call/expected and stdin/stdout test modes, harness injection
     harness_generator.py     # Lazy Java/C++ harness build via LLM, sandbox-verified, cached to Supabase
@@ -417,7 +378,7 @@ backend/
     supabase_client.py       # Singleton Supabase client using service-role key
     logger.py                # structlog JSON logger
     retry.py                 # Exponential-backoff retry decorator
-    tts.py                   # edge-tts wrapper → audio/mpeg stream
+    tts.py                   # edge-tts wrapper -> audio/mpeg stream
   data/
     question_bank.json       # 357 questions: 295 technical + 42 behavioral + 20 system-design (local seed)
   tests/
@@ -446,7 +407,7 @@ frontend/src/
     useSpeechRecognition.js  # Web Speech API wrapper
     useSpeechSynthesis.js    # TTS playback hook
   lib/
-    api.ts                   # Typed REST client — attaches Bearer JWT to every request
+    api.ts                   # Typed REST client: attaches Bearer JWT to every request
     supabaseClient.ts        # Supabase auth client using anon key, PKCE flow
 ```
 
@@ -529,30 +490,30 @@ rate_limit_events (
 
 ## Appendix C: API Reference
 
-### Interview — `/api/interview`
+### Interview: `/api/interview`
 
 | Method | Path | Rate limit | Description |
 |---|---|---|---|
-| `POST` | `/api/interview/start` | 30/min | Creates session, returns `{session_id, track, question}`. 429 if user has ≥ 3 active sessions. |
+| `POST` | `/api/interview/start` | 30/min | Creates session, returns `{session_id, track, question}`. 429 if user has >= 3 active sessions. |
 | `POST` | `/api/interview/message` | 30/min | Sends candidate message. Assigns question on first reply. Returns `{question, question_context?}`. 410 if session idle > 30 min. |
 | `POST` | `/api/interview/code/run` | 20/min | Enqueues code execution. Returns `{job_id}` immediately. |
-| `GET` | `/api/interview/code/job/{id}` | — | Polls job status: `{status: pending\|done\|error, result?}` |
+| `GET` | `/api/interview/code/job/{id}` | - | Polls job status: `{status: pending\|done\|error, result?}` |
 | `POST` | `/api/interview/code/test` | 20/min | Runs test harness. Returns `{status, visible_tests[], hidden_tests[], passed, total, error_type?}` |
-| `GET` | `/api/interview/{id}/boilerplate?language=` | — | Returns `{boilerplate, supported}` for the session's assigned problem in the given language. |
-| `POST` | `/api/interview/end` | — | Evaluates session. For system-design: also calls `evaluate_diagram`. Returns `{overall_score, summary, star_analysis, evaluations[], diagram_evaluation?}` |
-| `DELETE` | `/api/interview/{id}` | — | Deletes session and all associated messages and evaluations. |
+| `GET` | `/api/interview/{id}/boilerplate?language=` | - | Returns `{boilerplate, supported}` for the session's assigned problem in the given language. |
+| `POST` | `/api/interview/end` | - | Evaluates session. For system-design: also calls `evaluate_diagram`. Returns `{overall_score, summary, star_analysis, evaluations[], diagram_evaluation?}` |
+| `DELETE` | `/api/interview/{id}` | - | Deletes session and all associated messages and evaluations. |
 
-### TTS — `/api/tts`
+### TTS: `/api/tts`
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/tts/speak?text=` | Returns `audio/mpeg` stream via Microsoft Edge neural TTS. Text: 1–2,000 characters. |
+| `GET` | `/api/tts/speak?text=` | Returns `audio/mpeg` stream via Microsoft Edge neural TTS. Text: 1-2,000 characters. |
 
 ### Health
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{status: "ok"}` — used by Azure health probes. |
+| `GET` | `/api/health` | Returns `{status: "ok"}`, used by Azure health probes. |
 
 All endpoints except `/api/health` require `Authorization: Bearer <JWT>`.
 
@@ -562,10 +523,10 @@ All endpoints except `/api/health` require `Authorization: Bearer <JWT>`.
 
 | Scenario | Behaviour |
 |---|---|
-| Missing or expired JWT | 401 — frontend redirects to login |
-| Request over rate limit | 429 — message shown to candidate |
-| 4th concurrent session start | 429 — "You have too many active sessions" |
-| Session idle > 30 minutes | 410 — candidate prompted to start a new session |
+| Missing or expired JWT | 401; frontend redirects to login |
+| Request over rate limit | 429; message shown to candidate |
+| 4th concurrent session start | 429; "You have too many active sessions" |
+| Session idle > 30 minutes | 410; candidate prompted to start a new session |
 | Session belongs to a different user | 403 |
 | Groq rate-limited or 5xx | Automatic retry on Ollama Cloud |
 | Piston unavailable | Falls through to Wandbox |
