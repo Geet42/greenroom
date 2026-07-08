@@ -23,7 +23,7 @@ export default function Interview() {
   const session = useInterviewSession({
     track,
     boardRef,
-    onQuestionContext: codeRunner.setQuestionContext,
+    onQuestionContext: codeRunner.handleQuestionAssigned,
   });
 
   return (
@@ -160,6 +160,7 @@ export default function Interview() {
                 questionContext={codeRunner.questionContext}
                 onLanguageChange={(lang) => codeRunner.handleLanguageChange(lang, session.sessionId)}
                 onRun={() => codeRunner.handleRunCode(session.sessionId)}
+                onReset={codeRunner.handleResetBoilerplate}
               />
             ) : track === "system-design" ? (
               <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
