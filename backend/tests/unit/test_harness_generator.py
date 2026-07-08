@@ -37,6 +37,29 @@ def test_python_method_inside_class_passes():
     assert _verify_signature("python", code, "get")
 
 
+def test_python_class_definition_matches_bare_class_name():
+    # Stateful/constructor-based problems: function_name IS the class itself
+    # (e.g. "LRUCache"), not one of its methods.
+    code = (
+        "class LRUCache:\n"
+        "    def __init__(self, capacity):\n        pass\n\n"
+        "    def get(self, key):\n        pass\n\n"
+        "    def put(self, key, value):\n        pass\n"
+    )
+    assert _verify_signature("python", code, "LRUCache")
+
+
+def test_node_class_definition_matches_bare_class_name():
+    code = (
+        "class LRUCache {\n"
+        "  constructor(capacity) {}\n"
+        "  get(key) {}\n"
+        "  put(key, value) {}\n"
+        "}\n"
+    )
+    assert _verify_signature("node", code, "LRUCache")
+
+
 def test_python_empty_code_fails():
     assert not _verify_signature("python", "", "two_sum")
 

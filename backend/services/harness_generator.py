@@ -245,8 +245,8 @@ def _persist(question_id: str, language: str, harness_data: dict) -> None:
 # generate. This is purely editor scaffolding: a question-specific signature
 # instead of the generic "write your solution here" starter.
 #
-# Two very different correctness profiles depending on how the bank calls the
-# candidate's code:
+# Three correctness profiles depending on how the bank calls the candidate's
+# code:
 #   - Plain functions (e.g. "two_sum") are called positionally in tests["call"]
 #     ("two_sum([2,7,11,15], 9)") — parameter names are cosmetic only, so an
 #     LLM-inferred signature is fine, verified with a syntax-only check.
@@ -256,22 +256,34 @@ def _persist(question_id: str, language: str, harness_data: dict) -> None:
 #     candidate's otherwise-correct code throws "unexpected keyword argument"
 #     against every test. Those names already exist verbatim in tests[0]["call"],
 #     so they're extracted deterministically instead of guessed by an LLM.
+#   - Stateful/constructor-based entries (function_name is a bare class name,
+#     e.g. "LRUCache"; tests are multi-statement chains like
+#     "obj = LRUCache(2); obj.put(1,1); obj.get(1)") — a small group (2/357
+#     currently), calls are positional so this is LLM-inferred like the plain-
+#     function group, just asked to emit a class instead of a bare function.
 
 _SIGNATURE_LANG_LABEL = {"python": "Python", "node": "JavaScript"}
 _SIGNATURE_PLACEHOLDER = {"python": "pass", "node": "// TODO: implement"}
 
 _SIGNATURE_SYSTEM = """\
-You write a starter function signature for a coding interview problem, for the candidate's \
-code editor. Reply with ONLY {language} source code — the function the candidate should \
-implement, with a placeholder body ({placeholder}) and no logic. No markdown fences, no \
-explanation, no imports the candidate doesn't need.
+You write starter code for a coding interview problem, for the candidate's code editor. Reply \
+with ONLY {language} source code — no markdown fences, no explanation, no imports the \
+candidate doesn't need.
+
+If the test calls below are a single expression (e.g. `two_sum([2,7,11,15], 9)`), write ONLY a \
+function named exactly `{function_name}`, with a placeholder body ({placeholder}) and no logic.
+
+If the test calls below are a multi-statement chain (e.g. `obj = {function_name}(2); \
+obj.put(1,1); obj.get(1)`), this is a stateful/constructor-based problem: write a class named \
+exactly `{function_name}`, with a constructor matching the first call's arguments and a stub \
+method (placeholder body {placeholder}, no logic) for every distinct method name called on the \
+object, matching each method's own argument count.
 
 The problem statement usually shows the canonical call literally, e.g. `two_sum(nums, target)` \
 — if it does, you MUST reuse those exact parameter names verbatim, in the same order. Only \
 invent your own meaningful parameter names if the problem statement does not spell out a \
 signature. Do not name parameters after the literal test-call arguments below (those are only \
-there to show argument count/shape, not names). The function name MUST be exactly \
-`{function_name}`."""
+there to show argument count/shape, not names)."""
 
 
 def _generate_signature(language: str, method_name: str, question: dict) -> str | None:
@@ -377,6 +389,10 @@ def _build_class_signature(language: str, class_name: str, method_name: str, par
 
 
 def _verify_signature(language: str, code: str, function_name: str) -> bool:
+    """Accepts either a bare function/method named `function_name` (the plain
+    and class-method-extraction paths), or a class DEFINITION named
+    `function_name` (the stateful/constructor-based path, where function_name
+    is the class itself, e.g. "LRUCache")."""
     if not code.strip():
         return False
     if language == "python":
@@ -385,7 +401,8 @@ def _verify_signature(language: str, code: str, function_name: str) -> bool:
         except SyntaxError:
             return False
         return any(
-            isinstance(node, ast.FunctionDef) and node.name == function_name
+            (isinstance(node, ast.FunctionDef) and node.name == function_name)
+            or (isinstance(node, ast.ClassDef) and node.name == function_name)
             for node in ast.walk(tree)
         )
     if language == "node":
@@ -393,6 +410,7 @@ def _verify_signature(language: str, code: str, function_name: str) -> bool:
             re.compile(rf"function\s+{re.escape(function_name)}\s*\("),
             re.compile(rf"(?:const|let|var)\s+{re.escape(function_name)}\s*=\s*(?:function\b|\()"),
             re.compile(rf"\b{re.escape(function_name)}\s*\([^)]*\)\s*\{{"),
+            re.compile(rf"class\s+{re.escape(function_name)}\b"),
         ]
         return any(p.search(code) for p in patterns)
     return False
