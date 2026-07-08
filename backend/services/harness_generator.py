@@ -124,10 +124,13 @@ def _generate(language: str, question: dict) -> dict | None:
     system = _SYSTEM.format(
         language=lang_label, boilerplate_marker=b_marker, solution_marker=s_marker, harness_marker=h_marker,
     )
+    from services.question_bank import parse_function_name
+    _, method_name = parse_function_name(question.get("function_name"))
+
     tests_preview = "\n".join(f'  {t["call"]}  ->  {t["expected"]}' for t in question["tests"])
     user = (
         f"Problem: {question['title']}\n\n{question['prompt']}\n\n"
-        f"function_name: {question['function_name']}\n\nTest cases:\n{tests_preview}"
+        f"function_name: {method_name}\n\nTest cases:\n{tests_preview}"
     )
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -240,33 +243,45 @@ def _persist(question_id: str, language: str, harness_data: dict) -> None:
 # Unlike Java/C++, Python and JS problems already run through the test runner
 # by calling the candidate's function directly — there is no driver/harness to
 # generate. This is purely editor scaffolding: a question-specific signature
-# instead of the generic "write your solution here" starter. A wrong inferred
-# parameter name can't break test correctness (tests call positionally), so
-# this is verified with a syntax-only check rather than a sandbox run.
+# instead of the generic "write your solution here" starter.
+#
+# Two very different correctness profiles depending on how the bank calls the
+# candidate's code:
+#   - Plain functions (e.g. "two_sum") are called positionally in tests["call"]
+#     ("two_sum([2,7,11,15], 9)") — parameter names are cosmetic only, so an
+#     LLM-inferred signature is fine, verified with a syntax-only check.
+#   - Class-based, LeetCode-style entries ("Solution().methodName") are ALWAYS
+#     called with keyword arguments (e.g. "Solution().foo(nums=[1,2], k=3)") —
+#     the parameter names are load-bearing here: get one wrong and a
+#     candidate's otherwise-correct code throws "unexpected keyword argument"
+#     against every test. Those names already exist verbatim in tests[0]["call"],
+#     so they're extracted deterministically instead of guessed by an LLM.
 
 _SIGNATURE_LANG_LABEL = {"python": "Python", "node": "JavaScript"}
 _SIGNATURE_PLACEHOLDER = {"python": "pass", "node": "// TODO: implement"}
 
 _SIGNATURE_SYSTEM = """\
 You write a starter function signature for a coding interview problem, for the candidate's \
-code editor. Reply with ONLY {language} source code — the function (or class, for \
-stateful/constructor-based problems) the candidate should implement, with a placeholder body \
-({placeholder}) and no logic. No markdown fences, no explanation, no imports the candidate \
-doesn't need.
+code editor. Reply with ONLY {language} source code — the function the candidate should \
+implement, with a placeholder body ({placeholder}) and no logic. No markdown fences, no \
+explanation, no imports the candidate doesn't need.
 
 The problem statement usually shows the canonical call literally, e.g. `two_sum(nums, target)` \
 — if it does, you MUST reuse those exact parameter names verbatim, in the same order. Only \
 invent your own meaningful parameter names if the problem statement does not spell out a \
 signature. Do not name parameters after the literal test-call arguments below (those are only \
-there to show argument count/shape, not names). The function or method name MUST be exactly \
+there to show argument count/shape, not names). The function name MUST be exactly \
 `{function_name}`."""
 
 
-def _generate_signature(language: str, question: dict) -> str | None:
+def _generate_signature(language: str, method_name: str, question: dict) -> str | None:
+    """LLM-inferred signature for the plain-function group — parameter names
+    here are cosmetic (tests call positionally), so a wrong guess can't break
+    correctness, only readability."""
     system = _SIGNATURE_SYSTEM.format(
         language=_SIGNATURE_LANG_LABEL[language],
         placeholder=_SIGNATURE_PLACEHOLDER[language],
-        function_name=question["function_name"],
+        function_name=method_name,
     )
     tests_preview = "\n".join(f'  {t["call"]}  ->  {t["expected"]}' for t in question["tests"])
     user = f"Problem: {question['title']}\n\n{question['prompt']}\n\nTest calls:\n{tests_preview}"
@@ -292,9 +307,73 @@ def _generate_signature(language: str, question: dict) -> str | None:
     if first_line.strip().lower() in ("python", "javascript", "js"):
         code = rest.strip()
 
-    if not _verify_signature(language, code, question["function_name"]):
+    if not _verify_signature(language, code, method_name):
         return None
     return code
+
+
+def _extract_kwarg_names(call: str, method_name: str) -> list[str] | None:
+    """Extracts keyword-argument names, in order, from a call string like
+    "Solution().foo(nums=[1, 2], k=3)" -> ["nums", "k"]. Returns None if the
+    call isn't purely keyword-style (so callers can fall back to LLM inference)
+    — every entry currently in the bank's "Solution()." group parses cleanly,
+    but this stays defensive for future imports."""
+    marker = method_name + "("
+    idx = call.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(method_name)
+    end = call.rfind(")")
+    if end <= start:
+        return None
+    inner = call[start + 1:end]
+    if not inner.strip():
+        return []
+
+    args: list[str] = []
+    depth = 0
+    current: list[str] = []
+    in_str: str | None = None
+    for ch in inner:
+        if in_str:
+            current.append(ch)
+            if ch == in_str:
+                in_str = None
+        elif ch in ("'", '"'):
+            in_str = ch
+            current.append(ch)
+        elif ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        args.append("".join(current))
+
+    names = []
+    for arg in args:
+        m = re.match(r"^\s*(\w+)\s*=", arg)
+        if not m:
+            return None
+        names.append(m.group(1))
+    return names
+
+
+def _build_class_signature(language: str, class_name: str, method_name: str, params: list[str]) -> str:
+    """Deterministically builds a class-based signature — no LLM involved, so
+    there's nothing to get wrong: the parameter names are exactly what the
+    test harness will call with."""
+    if language == "python":
+        args = ", ".join(["self", *params])
+        return f"class {class_name}:\n    def {method_name}({args}):\n        pass\n"
+    args = ", ".join(params)
+    return f"class {class_name} {{\n    {method_name}({args}) {{\n        // TODO: implement\n    }}\n}}\n"
 
 
 def _verify_signature(language: str, code: str, function_name: str) -> bool:
@@ -331,8 +410,22 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
     if cached:
         return cached
 
+    from services.question_bank import parse_function_name
+    class_name, method_name = parse_function_name(question.get("function_name"))
+
     import asyncio
-    code = await asyncio.to_thread(_generate_signature, language, question)
+
+    code: str | None = None
+    if class_name and question.get("tests"):
+        params = _extract_kwarg_names(question["tests"][0]["call"], method_name)
+        if params is not None:
+            candidate = _build_class_signature(language, class_name, method_name, params)
+            if _verify_signature(language, candidate, method_name):
+                code = candidate
+
+    if code is None:
+        code = await asyncio.to_thread(_generate_signature, language, method_name, question)
+
     if not code:
         return None
 
