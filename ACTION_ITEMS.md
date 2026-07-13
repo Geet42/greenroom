@@ -16,13 +16,13 @@ stays as the durable, versioned summary of *what* the items are and *why*.
 | Fix boilerplate generation (function signature, not full `main`) | In progress | [PR #12](https://github.com/VishwajeetRaut/greenroom/pull/12), [PR #11](https://github.com/VishwajeetRaut/greenroom/pull/11) |
 | Smooth question-answering flow (interviewer/candidate turn friction) | In progress | [PR #11](https://github.com/VishwajeetRaut/greenroom/pull/11) |
 | Reset button in code editor to restore original boilerplate | In progress | [PR #12](https://github.com/VishwajeetRaut/greenroom/pull/12) |
-| Self-improvement loop for evaluation engine (LLM critiques/refines its own scoring) | In progress | see `backend/services/llm.py::evaluate_session` |
+| Self-improvement loop for evaluation engine (LLM critiques/refines its own scoring) | In progress | [PR #18](https://github.com/VishwajeetRaut/greenroom/pull/18) — reviewer pass in `backend/services/llm.py::evaluate_session` |
 
 ## Usage and Monitoring
 
 | Item | Status | Notes |
 |---|---|---|
-| Track real user counts and click activity (usage spikes / drop-off) | In progress | minimal event-tracking scaffold being added |
+| Track real user counts and click activity (usage spikes / drop-off) | In progress | [PR #19](https://github.com/VishwajeetRaut/greenroom/pull/19) — `analytics_events` table + `POST /api/analytics/event` |
 | Explore Microsoft/Azure monitoring tools for observability | Not started | candidates: Azure Application Insights, Azure Monitor / Log Analytics (backend already emits JSON logs structured for Log Analytics ingestion, see `backend/services/logger.py`) |
 
 ## Process and Collaboration
