@@ -138,7 +138,7 @@ def _generate(language: str, question: dict) -> dict | None:
         from services.llm import _make_llm
         llm = _make_llm(temperature=0.2, max_tokens=3000)
         result = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-        raw = result.content
+        raw = str(result.content)
     except Exception:
         try:
             resp = httpx.post(
@@ -304,7 +304,7 @@ def _generate_signature(language: str, method_name: str, question: dict) -> str 
 
     try:
         llm = _make_llm(temperature=0.2, max_tokens=400)
-        raw = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content
+        raw = str(llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content)
     except Exception:
         try:
             raw = _fallback_chat(
