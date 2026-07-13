@@ -35,17 +35,16 @@ export function useCodeRunner() {
   const [boilerplateNote, setBoilerplateNote] = useState(null);
   const [questionContext, setQuestionContext] = useState(null);
   const boilerplateRequestRef = useRef(0);
+  // Tracks the last-known-original source per language, so the reset button
+  // can restore it without refetching (starter code, or fetched harness boilerplate).
+  const originalCodeRef = useRef({ python: STARTER_CODE.python });
 
-  // sessionId is passed per-call so the hook doesn't need it at construction time
-  const handleLanguageChange = async (newLanguage, sessionId) => {
-    setLanguage(newLanguage);
-    setCode(STARTER_CODE[newLanguage]);
-    setTestResults(null);
-    setRevealedCount(0);
-    setBoilerplateNote(null);
-
-    const lang = LANGUAGES.find((l) => l.id === newLanguage);
-    if (!sessionId || (lang.id !== "java" && lang.id !== "cpp")) return;
+  // Fetches question-specific boilerplate for `langId` and swaps it in if found.
+  // Shared by language switching and by the question-assigned handler below,
+  // since Python is the default language and never goes through a "switch".
+  const fetchBoilerplate = async (langId, sessionId) => {
+    const lang = LANGUAGES.find((l) => l.id === langId);
+    if (!sessionId) return;
 
     const requestId = ++boilerplateRequestRef.current;
     try {
@@ -53,12 +52,40 @@ export function useCodeRunner() {
       if (boilerplateRequestRef.current !== requestId) return;
       if (res.boilerplate) {
         setCode(res.boilerplate);
+        originalCodeRef.current[langId] = res.boilerplate;
       }
       // If !res.supported, silently keep the default starter code.
       // The test runner will show a specific error if the user tries to run.
     } catch {
       // Generic starter code already showing — silently keep it.
     }
+  };
+
+  // sessionId is passed per-call so the hook doesn't need it at construction time
+  const handleLanguageChange = async (newLanguage, sessionId) => {
+    setLanguage(newLanguage);
+    setCode(STARTER_CODE[newLanguage]);
+    originalCodeRef.current[newLanguage] = STARTER_CODE[newLanguage];
+    setTestResults(null);
+    setRevealedCount(0);
+    setBoilerplateNote(null);
+    await fetchBoilerplate(newLanguage, sessionId);
+  };
+
+  // Called once the interviewer assigns a technical question — fetches
+  // boilerplate for whatever language is currently selected (usually the
+  // default, Python, which never goes through handleLanguageChange).
+  const handleQuestionAssigned = (ctx, sessionId) => {
+    setQuestionContext(ctx);
+    fetchBoilerplate(language, sessionId);
+  };
+
+  const handleResetBoilerplate = () => {
+    const original = originalCodeRef.current[language];
+    if (original === undefined) return;
+    setCode(original);
+    setTestResults(null);
+    setRevealedCount(0);
   };
 
   const handleRunCode = async (sessionId) => {
@@ -113,6 +140,8 @@ export function useCodeRunner() {
     questionContext,
     setQuestionContext,
     handleLanguageChange,
+    handleQuestionAssigned,
     handleRunCode,
+    handleResetBoilerplate,
   };
 }

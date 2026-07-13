@@ -22,6 +22,7 @@ export default function CodeEditor({
   questionContext,
   onLanguageChange,
   onRun,
+  onReset,
 }) {
   const lang = LANGUAGES.find((l) => l.id === language);
 
@@ -30,15 +31,25 @@ export default function CodeEditor({
       {/* Header: label + language selector */}
       <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
         <span className="text-sm text-mute">Code editor</span>
-        <select
-          value={language}
-          onChange={(e) => onLanguageChange(e.target.value)}
-          className="rounded-lg border border-white/10 bg-panelLight px-3 py-1.5 text-xs text-cream"
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.id} value={l.id}>{l.label}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onReset}
+            disabled={running}
+            title="Reset to original boilerplate"
+            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-mute transition hover:border-white/30 hover:text-cream disabled:opacity-50"
+          >
+            ↺ Reset
+          </button>
+          <select
+            value={language}
+            onChange={(e) => onLanguageChange(e.target.value)}
+            className="rounded-lg border border-white/10 bg-panelLight px-3 py-1.5 text-xs text-cream"
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.id} value={l.id}>{l.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Constraints (shown once question is assigned) */}
