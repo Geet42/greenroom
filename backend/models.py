@@ -125,3 +125,9 @@ class EndSessionResponse(BaseModel):
     star_analysis: Optional[STARAnalysis] = None
     evaluations: List[EvaluationCategory]
     diagram_evaluation: Optional[DiagramEvaluation] = None
+
+
+class AnalyticsEventRequest(BaseModel):
+    event: str = Field(min_length=1, max_length=100)
+    session_id: Optional[str] = None
+    properties: Optional[dict] = None

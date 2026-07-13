@@ -64,6 +64,7 @@ export function useCodeRunner() {
   const handleRunCode = async (sessionId) => {
     if (!sessionId) return;
     const lang = LANGUAGES.find((l) => l.id === language);
+    api.trackEvent("code_run", { sessionId, properties: { language: lang.id } });
     setRunning(true);
     setTestResults(null);
     setRevealedCount(0);

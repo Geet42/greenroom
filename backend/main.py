@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from routers import interview, tts  # noqa: E402
+from routers import analytics, interview, tts  # noqa: E402
 from services.logger import log  # noqa: E402
 
 app = FastAPI(title="Greenroom API", version="0.1.0")
@@ -40,6 +40,7 @@ async def request_logger(request: Request, call_next):
 
 app.include_router(interview.router, prefix="/api")
 app.include_router(tts.router, prefix="/api")
+app.include_router(analytics.router, prefix="/api")
 
 
 @app.get("/api/health")

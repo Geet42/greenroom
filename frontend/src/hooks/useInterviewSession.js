@@ -101,6 +101,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
         setSessionId(res.session_id);
         setMessages([{ role: "interviewer", text: res.question }]);
         speakIfUnmuted(res.question);
+        api.trackEvent("session_start", { sessionId: res.session_id, properties: { track } });
       } catch (err) {
         if (err.message?.includes("401") || err.message?.includes("403")) {
           navigate("/login", { replace: true }); return;
@@ -199,6 +200,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
     stop();
     try {
       await api.endSession({ session_id: sessionId });
+      api.trackEvent("session_end", { sessionId, properties: { track } });
       navigate(`/results/${sessionId}`);
     } catch (err) {
       console.error("End session failed:", err);

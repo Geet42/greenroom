@@ -130,4 +130,13 @@ export const api = {
 
   speak: (text: string): string =>
     `${BASE_URL}/tts/speak?text=${encodeURIComponent(text)}`,
+
+  // Fire-and-forget usage/click tracking — never throws, so callers can
+  // invoke it inline without try/catch.
+  trackEvent: (event: string, opts: { sessionId?: string; properties?: Record<string, unknown> } = {}) => {
+    request("/analytics/event", {
+      method: "POST",
+      body: JSON.stringify({ event, session_id: opts.sessionId, properties: opts.properties }),
+    }).catch(() => {});
+  },
 };

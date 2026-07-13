@@ -6,6 +6,7 @@ or a write fails, the in-memory session remains authoritative and we continue.
 
 from __future__ import annotations
 
+from services.logger import log
 from services.session_store import now
 from services.supabase_client import get_supabase
 
@@ -78,3 +79,22 @@ def persist_evaluation(session_id: str, result: dict) -> None:
             "score": category.get("score"),
             "feedback": category.get("feedback"),
         }).execute()
+
+
+def persist_analytics_event(user_id: str, session_id: str | None, event: str, properties: dict | None) -> None:
+    """Best-effort usage/click tracking. Analytics must never break the
+    feature it's observing, so unlike the other persist_* functions here,
+    failures are caught and logged rather than left to propagate."""
+    sb = get_supabase()
+    if not sb:
+        return
+    try:
+        sb.table("analytics_events").insert({
+            "user_id": user_id,
+            "session_id": session_id,
+            "event": event,
+            "properties": properties or {},
+            "created_at": now(),
+        }).execute()
+    except Exception as exc:
+        log.warning("analytics.persist_failed", tracked_event=event, error=str(exc))
