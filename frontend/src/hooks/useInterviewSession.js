@@ -62,6 +62,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
   const [ending, setEnding] = useState(false);
   const [answerText, setAnswerText] = useState("");
   const [diagramWarning, setDiagramWarning] = useState(null);
+  const [sessionFull, setSessionFull] = useState(false);
 
   const transcriptEndRef = useRef(null);
   const initDoneRef = useRef(false);
@@ -183,6 +184,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
       setMessages((prev) => [...prev, { role: "interviewer", text: res.question }]);
       speakIfUnmuted(res.question);
       if (res.question_context && onQuestionContext) onQuestionContext(res.question_context, sessionId);
+      if (res.done) setSessionFull(true);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -235,6 +237,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
     isMuted,
     diagramWarning,
     setDiagramWarning,
+    sessionFull,
     handleStartRecording,
     handleSend,
     handleEnd,
