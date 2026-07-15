@@ -35,7 +35,7 @@ Greenroom is a three-service web application. The candidate interacts through a 
 
 #### System Architecture
 
-![System Architecture](docs/diagrams/architecture.png)
+![System Architecture](images/2026-06-30_33152fa_architecture.png)
 
 > **Color guide:** Green = primary/public-facing · Red = internal-only or fallback · Purple = CI/CD · Yellow = data layer
 
@@ -50,11 +50,11 @@ Greenroom is a three-service web application. The candidate interacts through a 
 
 #### User Flow
 
-![User Flow](docs/diagrams/user-flow.png)
+![User Flow](images/2026-06-30_33152fa_user-flow.png)
 
 #### Developer Request Flow
 
-![Developer Request Flow](docs/diagrams/developer-flow.png)
+![Developer Request Flow](images/2026-06-30_33152fa_developer-flow.png)
 
 ---
 
@@ -231,7 +231,7 @@ A web app where candidates pick an interview track, talk to an AI interviewer, o
 
 This diagram shows how every HTTP request moves through the backend — which file handles each step, where decisions are made, and which external services are called.
 
-![Developer Request Flow](docs/diagrams/developer-flow.png)
+![Developer Request Flow](images/2026-06-30_33152fa_developer-flow.png)
 
 ### Code structure
 

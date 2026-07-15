@@ -2,6 +2,25 @@
 
 Every unique version of the project's design document, extracted from git history (oldest first). Files are named `<date>_<commit>_<subject-slug>.md`.
 
+## Images
+
+`images/` holds every unique version of the diagrams these docs embed
+(deduped by content, same as the docs themselves), named
+`<date>_<commit>_<original-filename>`. Each snapshot above links to the
+image versions that were actually live as of that commit, so opening an
+older snapshot shows the diagrams as they looked at the time, not today's:
+
+| File | Versions |
+|---|---|
+| `architecture.svg` | 1 — added 2026-06-24 ([2c01196](https://github.com/VishwajeetRaut/greenroom/commit/2c01196)), used only by the two v2.0-era snapshots before the doc moved to `docs/diagrams/*.png` |
+| `architecture.png` | 2 — 2026-06-30 ([33152fa](https://github.com/VishwajeetRaut/greenroom/commit/33152fa)), 2026-07-08 ([9b380dd](https://github.com/VishwajeetRaut/greenroom/commit/9b380dd), current) |
+| `user-flow.png` | 2 — same two commits |
+| `developer-flow.png` | 2 — same two commits |
+| `legend.png` | 1 — added 2026-06-30, never changed since; not embedded inline in any snapshot's Markdown but kept for completeness |
+
+The 2026-06-17 (POC) and 2026-07-08 `e52a88f` snapshots have no diagrams —
+neither version embedded any images.
+
 | Date | Commit | Message |
 |---|---|---|
 | 2026-06-17 | [e878d99](https://github.com/VishwajeetRaut/greenroom/commit/e878d99) | [feat: LangChain LCEL agent, bug fixes, POC design doc](2026-06-17_e878d99_feat-langchain-lcel-agent-bug-fixes-poc-design-doc.md) |

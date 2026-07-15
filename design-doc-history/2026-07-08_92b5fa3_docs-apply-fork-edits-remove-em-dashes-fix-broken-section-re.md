@@ -46,17 +46,17 @@ Greenroom is a three-service web application. The candidate interacts through a 
 
 ### 2.1 System Architecture
 
-![System Architecture](docs/diagrams/architecture.png)
+![System Architecture](images/2026-07-08_9b380dd_architecture.png)
 
 > **Color guide:** Blue = core services, Green = Azure backend, Yellow = guardrail / LLM providers, Orange = external execution and TTS, Red = Piston sandbox (internal only), Purple = CI/CD
 
 ### 2.2 User Flow
 
-![User Flow](docs/diagrams/user-flow.png)
+![User Flow](images/2026-07-08_9b380dd_user-flow.png)
 
 ### 2.3 Developer Request Flow
 
-![Developer Request Flow](docs/diagrams/developer-flow.png)
+![Developer Request Flow](images/2026-07-08_9b380dd_developer-flow.png)
 
 ### 2.4 Request Lifecycle
 
