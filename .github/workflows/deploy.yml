@@ -1,0 +1,140 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  GITHUB_USER: vishwajeetraut
+  RESOURCE_GROUP: greenroom-rg
+  API_APP: greenroom-api
+  PISTON_APP: greenroom-piston
+  FRONTEND_APP: greenroom-frontend
+  FRONTEND_ORIGIN: https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
+  PISTON_INTERNAL: http://greenroom-piston.internal.orangeground-05e56063.swedencentral.azurecontainerapps.io/api/v2/execute
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      # ── Build & push all three images ────────────────────────────────────────
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push piston image
+        uses: docker/build-push-action@v5
+        with:
+          context: piston
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:latest
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_API_URL=https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io/api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Deploy to Azure Container Apps ────────────────────────────────────────
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy backend
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name ${{ env.API_APP }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:${{ steps.sha.outputs.short }} \
+              --set-env-vars \
+                GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
+                GROQ_MODEL="${{ secrets.GROQ_MODEL }}" \
+                SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+                SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+                FALLBACK_BASE_URL="${{ secrets.FALLBACK_BASE_URL }}" \
+                FALLBACK_API_KEY="${{ secrets.FALLBACK_API_KEY }}" \
+                FALLBACK_MODEL="${{ secrets.FALLBACK_MODEL }}" \
+                PISTON_URL="${{ env.PISTON_INTERNAL }}" \
+                ALLOWED_ORIGINS="${{ env.FRONTEND_ORIGIN }}" \
+              --output none
+
+      - name: Deploy piston
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name ${{ env.PISTON_APP }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:${{ steps.sha.outputs.short }} \
+              --output none
+
+      - name: Deploy frontend
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name ${{ env.FRONTEND_APP }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:${{ steps.sha.outputs.short }} \
+              --output none
+
+      - name: Summary
+        run: |
+          echo "### Deployed commit \`${{ steps.sha.outputs.short }}\` to Azure" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: ${{ env.FRONTEND_ORIGIN }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io" >> $GITHUB_STEP_SUMMARY
