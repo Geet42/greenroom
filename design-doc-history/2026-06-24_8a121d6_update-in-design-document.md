@@ -51,7 +51,7 @@ The platform has moved beyond local development. The backend and Piston code run
 
 ## 3. Architecture
 
-![Greenroom Architecture](./architecture.svg)
+![Greenroom Architecture](images/2026-06-24_2c01196_architecture.svg)
 
 ### 3.1 High-Level Stack
 
