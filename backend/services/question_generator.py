@@ -59,19 +59,23 @@ To generate a new one (only if truly nothing fits):
   "title": "<short title>",
   "topic": "<one or two word topic>",
   "difficulty": "easy" | "medium",
-  "prompt": "<full problem statement for stdin/stdout judging: candidate writes a complete \
-program that reads input from stdin and prints the answer to stdout>",
-  "solution_python": "<a complete, correct Python 3 program solving it>",
-  "inputs": ["<raw stdin text>", "<raw stdin text>", "<raw stdin text>", "<edge case stdin>", "<edge case stdin>"],
-  "claimed_outputs": ["<output you believe input 1 produces>", ...]
+  "prompt": "<full problem statement, LeetCode-style: candidate implements a single function \
+that takes arguments and returns a value — do NOT ask them to read from stdin or write a full \
+program>",
+  "function_name": "<snake_case function name, e.g. two_sum>",
+  "solution_python": "<a complete, correct Python 3 function definition named function_name \
+that solves it — just the function, not a full program>",
+  "calls": ["<call expression using function_name, e.g. two_sum([2, 7, 11, 15], 9)>", ...at \
+least 5 calls, the last 2 covering edge cases>],
+  "claimed_outputs": ["<the value you believe call 1 returns, as a Python literal>", ...]
 }}
-"claimed_outputs" must have exactly one entry per "inputs" entry, in the same order."""
+"claimed_outputs" must have exactly one entry per "calls" entry, in the same order."""
 
 _SECOND_SOLUTION_SYSTEM = """\
-You are given a coding problem. Write a complete, correct Python 3 program that solves it by \
-reading input from stdin and printing the answer to stdout. Write your own independent \
-implementation — do not assume any particular algorithm. Reply with ONLY the Python code, \
-no markdown fences, no explanation."""
+You are given a coding problem. Write a complete, correct Python 3 function definition named \
+{function_name} that solves it — just the function, not a full program, no reading from stdin. \
+Write your own independent implementation — do not assume any particular algorithm. Reply with \
+ONLY the Python code, no markdown fences, no explanation."""
 
 _MAX_CATALOG_ENTRIES = 200
 _TOPIC_PERSIST_CAP = 25  # don't keep stacking generated problems onto an already-deep topic
@@ -101,17 +105,35 @@ def _build_catalog(questions: list[dict]) -> str:
     return "\n".join(f"{q['id']} | {q.get('topic', 'general')} | {q.get('difficulty', 'medium')} | {q['title']}" for q in sample)
 
 
-async def _run_solution(source: str, inputs: list[str]) -> list[str] | None:
-    """Runs `source` against every input through the real sandbox (never exec()'d
-    in this process). Returns observed stdout per input, or None on any crash."""
-    outputs = []
-    for stdin in inputs:
-        result = await piston.run_code("python", "3.10.0", source, stdin=stdin)
-        raw = result.get("run", {})
-        if raw.get("stderr") and raw.get("code", 0) != 0:
-            return None
-        outputs.append(raw.get("stdout", ""))
-    return outputs
+async def _run_solution(source: str, calls: list[str]) -> list[str] | None:
+    """Runs `source` (a function definition) against every call expression through
+    the real sandbox (never exec()'d in this process) — one call per line of
+    stdout, in order. Returns None on any crash. This is function-call
+    verification, not stdin/stdout: the candidate implements a function, the
+    same shape as the LeetCode-derived bank entries, so boilerplate/signature
+    generation works for these exactly like it does for bank questions."""
+    calls_json = json.dumps(calls)
+    harness = f'''{source}
+
+import json as _j
+_calls = {calls_json}
+for _c in _calls:
+    try:
+        print(_j.dumps(repr(eval(_c))))
+    except Exception as _e:
+        print(_j.dumps(f"ERROR: {{_e}}"))
+'''
+    result = await piston.run_code("python", "3.10.0", harness, stdin="")
+    raw = result.get("run", {})
+    if raw.get("stderr") and raw.get("code", 0) != 0:
+        return None
+    lines = [ln for ln in raw.get("stdout", "").splitlines() if ln.strip()]
+    if len(lines) != len(calls):
+        return None
+    try:
+        return [json.loads(ln) for ln in lines]
+    except json.JSONDecodeError:
+        return None
 
 
 def _ask_llm(system: str, user: str, temperature: float, max_tokens: int) -> str:
@@ -175,14 +197,15 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
 
     try:
         title, topic, difficulty = spec["title"], spec["topic"], spec["difficulty"]
-        prompt, solution, inputs = spec["prompt"], spec["solution_python"], spec["inputs"]
+        prompt, solution, calls = spec["prompt"], spec["solution_python"], spec["calls"]
+        function_name = spec["function_name"]
         claimed = spec.get("claimed_outputs") or []
-        if not inputs or len(inputs) < 3:
+        if not calls or len(calls) < 3 or not function_name:
             return question_bank.pick_question("technical", language="python")
     except (KeyError, TypeError):
         return question_bank.pick_question("technical", language="python")
 
-    actual_outputs = await _run_solution(solution, inputs)
+    actual_outputs = await _run_solution(solution, calls)
     if actual_outputs is None:
         return question_bank.pick_question("technical", language="python")
 
@@ -195,7 +218,7 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         if mismatches > 1:
             return question_bank.pick_question("technical", language="python")
 
-    tests = [{"stdin": i, "stdout": o} for i, o in zip(inputs, actual_outputs)]
+    tests = [{"call": c, "expected": o} for c, o in zip(calls, actual_outputs)]
     question = {
         "id": _slugify(title),
         "track": "technical",
@@ -203,7 +226,7 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         "difficulty": difficulty,
         "title": title,
         "prompt": prompt,
-        "function_name": None,
+        "function_name": function_name,
         "languages": ["python"],
         "tests": tests,
         "visible_count": min(3, len(tests)),
@@ -215,21 +238,24 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
     topic_count = sum(1 for q in technical if q.get("topic") == topic)
     title_collision = any(q["title"].strip().lower() == title.strip().lower() for q in technical)
     if not title_collision and topic_count < _TOPIC_PERSIST_CAP:
-        asyncio.create_task(_verify_and_persist(question, prompt, inputs, actual_outputs))
+        asyncio.create_task(_verify_and_persist(question, prompt, function_name, calls, actual_outputs))
 
     return question
 
 
-async def _verify_and_persist(question: dict, prompt: str, inputs: list[str], primary_outputs: list[str]) -> None:
+async def _verify_and_persist(
+    question: dict, prompt: str, function_name: str, calls: list[str], primary_outputs: list[str],
+) -> None:
     """Runs in the background (doesn't block the candidate's session) — gets a
     second, independently-prompted solution and only writes to Supabase if it
-    agrees with the primary solution on every input."""
+    agrees with the primary solution on every call."""
     try:
-        solution_b = await asyncio.to_thread(_ask_llm, _SECOND_SOLUTION_SYSTEM, prompt, 0.5, 800)
+        system = _SECOND_SOLUTION_SYSTEM.format(function_name=function_name)
+        solution_b = await asyncio.to_thread(_ask_llm, system, prompt, 0.5, 800)
     except Exception:
         return
 
-    outputs_b = await _run_solution(solution_b, inputs)
+    outputs_b = await _run_solution(solution_b, calls)
     if outputs_b is None:
         return
     if any(_normalize(a) != _normalize(b) for a, b in zip(primary_outputs, outputs_b)):
