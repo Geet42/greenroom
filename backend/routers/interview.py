@@ -35,7 +35,12 @@ from services.persistence import (
     persist_session_start,
 )
 from services.rate_limit import check_rate_limit
-from services.session_guard import check_idle_timeout, check_ownership, check_session_limit, is_turn_limit_reached
+from services.session_guard import (
+    check_idle_timeout,
+    check_ownership,
+    check_session_limit,
+    is_turn_limit_reached,
+)
 from services.session_store import SESSIONS, evict, get_session, now, session_lock
 from services.supabase_client import get_supabase
 
