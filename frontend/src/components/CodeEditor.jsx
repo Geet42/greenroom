@@ -192,10 +192,13 @@ export default function CodeEditor({
           </div>
         </div>
 
-        {/* Monaco editor — fixed proportion of the panel (not flex-1) so its
-            size is predictable and it never fights the results section below
-            for space. */}
-        <div className="shrink-0" style={{ height: testResults && !running ? "38%" : "100%" }}>
+        {/* Monaco editor — shares remaining space with the results box below
+            via flex-grow ratio (3:2), not a percentage/height hack. A fixed
+            height (even "100%") breaks the moment it has flex siblings that
+            also need room — 100% pushed the Run button and results clean out
+            of the panel, which is exactly the bug this replaces. min-h-0
+            lets it actually shrink to its share instead of overflowing. */}
+        <div className="min-h-0" style={{ flex: testResults && !running ? "3 1 0%" : "1 1 0%" }}>
           <Editor
             height="100%"
             theme="vs-dark"
@@ -244,15 +247,13 @@ export default function CodeEditor({
           )}
         </div>
 
-        {/* Results — flex-1 + min-h-0 is the load-bearing combination here:
-            it makes this box take exactly whatever space remains (never
-            more), so it can never push the panel taller than its parent and
-            get clipped by the ancestor's overflow-hidden. A fixed max-height
-            guess (what was here before) doesn't account for how much space
-            Monaco/toolbar/run-button actually consume, so it could still
-            partially clip past the card's real available height. */}
+        {/* Results — takes its 2-parts share of whatever space remains
+            (Monaco gets 3), scrolling internally for anything that doesn't
+            fit. Never a fixed max-height guess, which doesn't account for
+            how much space Monaco/toolbar/run-button actually consume and can
+            still get clipped by the ancestor's overflow-hidden. */}
         {!running && testResults && (
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+          <div className="min-h-0 overflow-y-auto px-4 pb-3" style={{ flex: "2 1 0%" }}>
             <TestResultsPanel testResults={testResults} revealedCount={revealedCount} />
           </div>
         )}
