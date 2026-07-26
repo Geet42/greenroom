@@ -68,7 +68,7 @@ async def main(limit: int | None, languages: list[str]) -> None:
         return
 
     has_signatures = _has_signatures_column(sb)
-    if not has_signatures and any(l in ("python", "node") for l in languages):
+    if not has_signatures and any(lang in ("python", "node") for lang in languages):
         print(
             "WARNING: 'signatures' column doesn't exist yet on `questions` — "
             "python/node signature generation will run but CANNOT persist, so "
@@ -76,7 +76,7 @@ async def main(limit: int | None, languages: list[str]) -> None:
             "supabase/migrations/20260708_python_js_signatures.sql first.\n"
             "Skipping python/node for this run."
         )
-        languages = [l for l in languages if l not in ("python", "node")]
+        languages = [lang for lang in languages if lang not in ("python", "node")]
 
     all_questions = question_bank._all_questions()
     technical = [q for q in all_questions if q.get("track") == "technical" and not _is_stdio(q)]
