@@ -15,15 +15,27 @@ const TRACK_LABELS = {
 };
 
 export default function Interview() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const track = params.get("track") || "behavioral";
+  const resumeSessionId = params.get("session") || undefined;
   const boardRef = useRef(null);
 
   const codeRunner = useCodeRunner();
   const session = useInterviewSession({
     track,
     boardRef,
-    onQuestionContext: codeRunner.handleQuestionAssigned,
+    // Only technical sessions have a code editor/boilerplate to fetch —
+    // wiring this unconditionally fired a wasted boilerplate request on
+    // every behavioral/system-design session's first assigned question.
+    onQuestionContext: track === "technical" ? codeRunner.handleQuestionAssigned : undefined,
+    resumeSessionId,
+    // Stamp the session id into the URL so a page refresh resumes the same
+    // interview instead of starting a brand-new one.
+    onSessionIdReady: (id) => {
+      if (params.get("session") !== id) {
+        setParams({ track, session: id }, { replace: true });
+      }
+    },
   });
 
   return (
@@ -173,7 +185,11 @@ export default function Interview() {
               />
             ) : track === "system-design" ? (
               <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
-                <SystemDesignBoard ref={boardRef} />
+                <SystemDesignBoard
+                  ref={boardRef}
+                  initialElements={session.initialDiagramElements}
+                  onSave={session.saveDiagram}
+                />
               </Suspense>
             ) : (
   <div className="flex h-full flex-col p-6">

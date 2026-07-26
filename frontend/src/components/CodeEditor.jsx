@@ -1,6 +1,27 @@
 import { useState } from "react";
 import Editor from "@monaco-editor/react";
+import ReactMarkdown from "react-markdown";
 import TestResultsPanel from "./TestResultsPanel";
+
+// Renders LLM-authored problem text (which may contain markdown like `code`,
+// **bold**, or bullet lists) instead of showing it as raw escaped text.
+function Prose({ children }) {
+  return (
+    <ReactMarkdown
+      components={{
+        p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+        code: ({ children }) => (
+          <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-xs text-cream">{children}</code>
+        ),
+        ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+        strong: ({ children }) => <strong className="font-semibold text-cream">{children}</strong>,
+      }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
 
 const LANGUAGES = [
   { id: "python",     label: "Python",     monaco: "python",     piston: "python", version: "3.10.0"  },
@@ -64,9 +85,7 @@ function ProblemPanel({ questionContext }) {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-cream/80 space-y-3">
-        {tab === "description" && (
-          <p className="leading-relaxed whitespace-pre-wrap">{questionContext.prompt}</p>
-        )}
+        {tab === "description" && <Prose>{questionContext.prompt}</Prose>}
 
         {tab === "examples" && (
           <div className="space-y-4">
@@ -106,7 +125,9 @@ function ProblemPanel({ questionContext }) {
               questionContext.constraints.map((c, i) => (
                 <li key={i} className="flex items-start gap-2">
                   <span className="text-sage mt-0.5 shrink-0">•</span>
-                  <span className="font-mono text-xs text-cream/80">{c}</span>
+                  <span className="font-mono text-xs text-cream/80">
+                    <Prose>{c}</Prose>
+                  </span>
                 </li>
               ))
             )}
@@ -171,8 +192,10 @@ export default function CodeEditor({
           </div>
         </div>
 
-        {/* Monaco editor — fills remaining space */}
-        <div className="flex-1 min-h-0">
+        {/* Monaco editor — fixed proportion of the panel (not flex-1) so its
+            size is predictable and it never fights the results section below
+            for space. */}
+        <div className="shrink-0" style={{ height: testResults && !running ? "38%" : "100%" }}>
           <Editor
             height="100%"
             theme="vs-dark"
@@ -191,7 +214,7 @@ export default function CodeEditor({
           />
         </div>
 
-        {/* Run button + results */}
+        {/* Run button — always visible, never pushed off-screen */}
         <div className="border-t border-white/5 px-4 py-3 shrink-0">
           <button
             onClick={onRun}
@@ -219,9 +242,20 @@ export default function CodeEditor({
               ))}
             </div>
           )}
-
-          {!running && <TestResultsPanel testResults={testResults} revealedCount={revealedCount} />}
         </div>
+
+        {/* Results — flex-1 + min-h-0 is the load-bearing combination here:
+            it makes this box take exactly whatever space remains (never
+            more), so it can never push the panel taller than its parent and
+            get clipped by the ancestor's overflow-hidden. A fixed max-height
+            guess (what was here before) doesn't account for how much space
+            Monaco/toolbar/run-button actually consume, so it could still
+            partially clip past the card's real available height. */}
+        {!running && testResults && (
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+            <TestResultsPanel testResults={testResults} revealedCount={revealedCount} />
+          </div>
+        )}
       </div>
     </div>
   );

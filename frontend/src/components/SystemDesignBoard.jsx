@@ -1,13 +1,35 @@
-import { forwardRef, useImperativeHandle, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Excalidraw } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 
-const SystemDesignBoard = forwardRef(function SystemDesignBoard(_props, ref) {
+const AUTOSAVE_DEBOUNCE_MS = 2000;
+
+const SystemDesignBoard = forwardRef(function SystemDesignBoard({ initialElements, onSave }, ref) {
   const [api, setApi] = useState(null);
+  const restoredRef = useRef(false);
+  const saveTimerRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     getElements: () => api?.getSceneElements() ?? [],
   }));
+
+  // Restore a previously-saved diagram once, as soon as both the Excalidraw
+  // API and the resumed data are available (whichever arrives second).
+  useEffect(() => {
+    if (!api || restoredRef.current || !initialElements?.length) return;
+    restoredRef.current = true;
+    api.updateScene({ elements: initialElements });
+  }, [api, initialElements]);
+
+  const handleChange = useCallback((elements) => {
+    if (!onSave) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => onSave(elements), AUTOSAVE_DEBOUNCE_MS);
+  }, [onSave]);
+
+  useEffect(() => () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -34,6 +56,7 @@ const SystemDesignBoard = forwardRef(function SystemDesignBoard(_props, ref) {
       <div className="relative flex-1" style={{ minHeight: "480px" }}>
         <Excalidraw
           excalidrawAPI={(a) => setApi(a)}
+          onChange={handleChange}
           theme="dark"
           UIOptions={{
             canvasActions: {

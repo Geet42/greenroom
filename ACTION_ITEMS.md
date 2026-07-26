@@ -64,3 +64,49 @@ What actually shipped, version by version, per the design doc's own
 - CI path-filtering + mypy/tsc gates
 - Real deploy automation
 - Design-doc history archive
+
+**2026-07-26 — bug-fix pass + interview-track reliability**
+- Fixed 10 reported bugs: session-delete not persisting, typed/recorded-answer
+  clobbering, spacebar-recording hang, refresh restarting the interview from
+  scratch, TTS audio surviving navigation away from the interview, "Practice
+  again"/Continue not resuming, missing End Session control on the Dashboard,
+  a mute bug that silently dropped in-flight interviewer audio, no delete-all
+  action, and unstyled problem/constraints text
+- Added `GET /interview/{id}/resume` — sessions are now resumable by id
+  instead of being start-only, closing the gap that caused several of the
+  above
+- Root-caused and fixed a real C++ code-execution bug (not just a
+  boilerplate-rendering issue): the generated harness's `#include`/`using
+  namespace std` came after the candidate's class in the merged source, so
+  most C++ submissions using `vector`/`string`/`stack` failed to compile —
+  this affected real candidate runs, not only the boilerplate step
+  (`services/harness_generator.py::merge_cpp_sources`)
+- Added a compile-check for generated boilerplate itself (previously only the
+  reference solution was verified, so a boilerplate with an empty/non-
+  compiling body could still be served to candidates)
+- Added `docs/EVALUATION_METRICS.md` — a proposed framework for measuring
+  interviewer context-accuracy, evaluation-score validity, and technical-track
+  correctness
+
+## Open items
+
+Carried forward, not yet picked up:
+
+- **Harness-generation reliability for Java/C++** — first-try verification
+  pass rate for LLM-generated test harnesses is inconsistent (observed ~40-60%
+  on a small sample); some failures are genuine LLM driver-code bugs (e.g.
+  binding a temporary to a non-const C++ reference) rather than boilerplate
+  issues. Needs prompt iteration or a retry-with-feedback loop.
+- **Human-vs-bot evaluation-score correlation study** — no data yet on
+  whether `overall_score` actually agrees with a human interviewer's rating
+  (see `docs/EVALUATION_METRICS.md` §2). Needs 30+ real transcripts before it
+  can start.
+- **Azure monitoring/alerting** — no Application Insights, Log Analytics, or
+  alert rules currently exist for the Container Apps deployment. Drafted in
+  `infra/monitoring.bicep` + `infra/deploy-monitoring.sh` (Log Analytics
+  workspace, Application Insights, 5xx/restart/high-CPU alerts on all three
+  apps) but **not yet deployed** — needs `environmentId`/alert-email filled
+  in, a `what-if` review, and the metric names double-checked against the
+  live resource before applying (see comments in the script).
+- **Seniority/role differentiation** — formally out of scope as of v4.0, but
+  still the most-requested "make it feel less generic" ask if revisited.

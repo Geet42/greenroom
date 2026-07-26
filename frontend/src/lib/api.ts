@@ -78,6 +78,17 @@ export interface EndSessionResponse {
 
 export interface BoilerplateResponse { boilerplate: string | null; supported: boolean }
 
+export interface HistoryMessage { role: string; content: string }
+export interface ResumeSessionResponse {
+  session_id: string;
+  track: string;
+  history: HistoryMessage[];
+  question_context?: QuestionContext;
+  diagram_elements?: unknown[];
+}
+
+export interface SaveDiagramPayload { session_id: string; elements: unknown[] }
+
 // ── API client ────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -123,6 +134,15 @@ export const api = {
 
   deleteSession: (sessionId: string) =>
     request<{ deleted: string }>(`/interview/${sessionId}`, { method: "DELETE" }),
+
+  resumeSession: (sessionId: string) =>
+    request<ResumeSessionResponse>(`/interview/${sessionId}/resume`),
+
+  saveDiagram: (payload: SaveDiagramPayload) =>
+    request<{ saved: boolean }>("/interview/diagram", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   getBoilerplate: (sessionId: string, language: string) =>
     request<BoilerplateResponse>(

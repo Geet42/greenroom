@@ -136,3 +136,85 @@ def sanitize(draft: str, track: str, regenerate_fn) -> str:
         pass
 
     return random.choice(_FALLBACK_QUESTIONS[track])
+
+
+# ── Second-problem guard (technical + system-design) ─────────────────────────
+# Technical: the code editor, boilerplate, and test harness are tied to
+# exactly ONE assigned_question per session. System-design: the candidate's
+# diagram is graded at the end against that ONE assigned problem's
+# expected_components. Neither track has a mechanism to swap to a new problem
+# mid-session. Prompt hardening alone isn't reliable (see TRACK_PERSONAS in
+# llm.py) — the model has been observed ignoring it and announcing a second
+# "classic challenge" anyway, which silently desyncs the transcript (talking
+# about problem B) from whatever's actually being graded (still problem A).
+# This is the same defense-in-depth shape as sanitize() above, just for a
+# different failure mode.
+
+_NEW_PROBLEM_PATTERNS = [
+    re.compile(r"\blet'?s\s+(move on|switch|try|design)\s+(to|another|a\s+different)\b", re.IGNORECASE),
+    re.compile(r"\b(another|a new|a different|the next)\s+(coding\s+|technical\s+|system[\s-]?design\s+)?(problem|challenge|question|system)\b", re.IGNORECASE),
+    re.compile(r"^\s*\**problem\**\s*:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\bnext\s+(problem|challenge)\b", re.IGNORECASE),
+    re.compile(r"\blet'?s\s+design\s+(a|an)\b", re.IGNORECASE),
+]
+
+
+def introduces_new_problem(text: str) -> bool:
+    """Layer 2: fast regex check for phrasing that hands the candidate a
+    second problem instead of following up on the one already assigned."""
+    return any(p.search(text) for p in _NEW_PROBLEM_PATTERNS)
+
+
+def _llm_judge_new_problem(text: str) -> bool:
+    """Layer 3: LLM judge, only called when regex is clean. Fails open (False)."""
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        return False
+    prompt = (
+        "Does the following interviewer message try to introduce or assign a NEW problem "
+        "(coding problem or system design problem) to the candidate, as opposed to following "
+        "up on a problem already given (discussing approach, complexity, trade-offs, scale, "
+        "failure modes, etc.)? Reply YES or NO only.\n\n" + text
+    )
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 3,
+                "temperature": 0,
+            },
+            timeout=5,
+        )
+        resp.raise_for_status()
+        answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
+        return answer.startswith("YES")
+    except Exception:
+        return False
+
+
+def sanitize_no_new_problem(draft: str, regenerate_fn) -> str:
+    """Same shape as sanitize(), scoped to the 'introduces a second coding
+    problem' failure mode. Callers gate this themselves — only relevant once a
+    technical problem has already been assigned (not on the turn it's first
+    presented, which legitimately looks like 'introducing a problem')."""
+    layer1 = introduces_new_problem(draft)
+    layer2 = not layer1 and _llm_judge_new_problem(draft)
+
+    if not layer1 and not layer2:
+        return draft
+
+    try:
+        retry = regenerate_fn()
+        if not introduces_new_problem(retry) and not _llm_judge_new_problem(retry):
+            return retry
+    except Exception:
+        pass
+
+    return (
+        "Let's keep digging into the problem you're already working on — what's the time "
+        "complexity of your current approach, and do you see any way to improve it?"
+    )

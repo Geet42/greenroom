@@ -12,10 +12,12 @@ from models import (
     MessageRequest,
     MessageResponse,
     QuestionContext,
+    ResumeSessionResponse,
     RunCodeJobResponse,
     RunCodeRequest,
     RunTestsRequest,
     RunTestsResponse,
+    SaveDiagramRequest,
     StartSessionRequest,
     StartSessionResponse,
 )
@@ -30,11 +32,13 @@ from services import (
 )
 from services.persistence import (
     persist_assigned_question,
+    persist_diagram,
     persist_evaluation,
     persist_message,
     persist_session_start,
 )
 from services.rate_limit import check_rate_limit
+from services.retry import with_retry
 from services.session_guard import (
     check_idle_timeout,
     check_ownership,
@@ -77,6 +81,8 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "next_sequence_no": 1,
         "last_activity_at": now(),
         "job_description": req.job_description or None,
+        "status": "active",
+        "diagram_elements": [],
     }
 
     await run_in_threadpool(
@@ -134,7 +140,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
 
         question = await run_in_threadpool(
             llm.next_question, session["track"], session["role"], session["history"],
-            session.get("assigned_question"), session.get("job_description"),
+            session.get("assigned_question"), session.get("job_description"), is_first_reply,
         )
 
         session["history"].append({"role": "interviewer", "content": question})
@@ -198,10 +204,8 @@ async def get_boilerplate(session_id: str, language: str, user: AuthenticatedUse
         return BoilerplateResponse(boilerplate=None, supported=True)
 
     if bank_lang in (assigned.get("languages") or []):
-        if bank_lang in ("python", "node"):
-            signature = await harness_generator.get_or_generate_signature(assigned, bank_lang)
-            return BoilerplateResponse(boilerplate=signature, supported=True)
-        return BoilerplateResponse(boilerplate=None, supported=True)
+        signature = await harness_generator.get_or_generate_signature(assigned, bank_lang)
+        return BoilerplateResponse(boilerplate=signature, supported=True)
 
     if bank_lang not in ("java", "cpp"):
         return BoilerplateResponse(boilerplate=None, supported=False)
@@ -210,6 +214,48 @@ async def get_boilerplate(session_id: str, language: str, user: AuthenticatedUse
     if not harness_data:
         return BoilerplateResponse(boilerplate=None, supported=False)
     return BoilerplateResponse(boilerplate=harness_data["boilerplate"], supported=True)
+
+
+@router.get("/{session_id}/resume", response_model=ResumeSessionResponse)
+async def resume_session(session_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session, user)
+    if session.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Session is no longer active")
+
+    # Resuming is itself activity — without this, a session that sat idle
+    # past SESSION_IDLE_TIMEOUT_MINUTES before being resumed would trip the
+    # idle-timeout check on the very next message, immediately after the
+    # candidate just resumed it.
+    session["last_activity_at"] = now()
+
+    ctx = _question_context(session["assigned_question"]) if session.get("assigned_question") else None
+    return ResumeSessionResponse(
+        session_id=session_id,
+        track=session["track"],
+        history=[{"role": m["role"], "content": m["content"]} for m in session["history"]],
+        question_context=ctx,
+        diagram_elements=session.get("diagram_elements") or [],
+    )
+
+
+@router.post("/diagram")
+async def save_diagram(req: SaveDiagramRequest, user: AuthenticatedUser = Depends(get_current_user)):
+    """Autosave endpoint for the system-design board — called debounced from
+    the frontend while the candidate draws, so a refresh/resume restores the
+    diagram along with the conversation instead of only the conversation."""
+    check_rate_limit(user.id, max_per_minute=30)
+
+    session = get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    check_ownership(session, user)
+
+    session["diagram_elements"] = req.elements
+    await run_in_threadpool(persist_diagram, req.session_id, req.elements)
+    return {"saved": True}
 
 
 @router.post("/code/test", response_model=RunTestsResponse)
@@ -248,10 +294,7 @@ async def _run_generated_harness(req: RunTestsRequest, assigned: dict, bank_lang
             "and occasionally fails on first attempt.",
             "transient",
         )
-    if bank_lang == "java":
-        full_source = harness_generator.merge_java_sources(req.source, harness_data["harness"])
-    else:
-        full_source = req.source + "\n\n" + harness_data["harness"]
+    full_source = harness_generator.merge_sources(bank_lang, [req.source, harness_data["harness"]])
     result = await piston.run_code(req.language, req.version, full_source, stdin="")
     raw = result.get("run", {})
     return test_runner.parse_results(raw.get("stdout", ""), raw.get("stderr", ""))
@@ -284,7 +327,7 @@ def _error_response(message: str, error_type: str) -> dict:
 
 
 @router.delete("/{session_id}")
-def delete_session(session_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+async def delete_session(session_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     session = get_session(session_id)
     if session:
         check_ownership(session, user)
@@ -292,10 +335,21 @@ def delete_session(session_id: str, user: AuthenticatedUser = Depends(get_curren
     evict(session_id)
 
     sb = get_supabase()
-    if sb:
-        sb.table("evaluations").delete().eq("session_id", session_id).execute()
-        sb.table("messages").delete().eq("session_id", session_id).execute()
-        sb.table("sessions").delete().eq("id", session_id).execute()
+    if not sb:
+        raise HTTPException(status_code=503, detail="Storage unavailable, session was not deleted")
+
+    async def _delete(table: str, column: str) -> None:
+        # Retried — a bulk "delete all" fires many of these concurrently, and
+        # a single transient network hiccup shouldn't surface as a 500 for a
+        # request that would have succeeded on retry.
+        await with_retry(
+            lambda: run_in_threadpool(lambda: sb.table(table).delete().eq(column, session_id).execute()),
+            attempts=3, base_delay=0.5, label=f"delete_session.{table}",
+        )
+
+    await _delete("evaluations", "session_id")
+    await _delete("messages", "session_id")
+    await _delete("sessions", "id")
     return {"deleted": session_id}
 
 
@@ -315,6 +369,7 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
                 "evaluations": [],
             }
             await run_in_threadpool(persist_evaluation, req.session_id, empty_result)
+            session["status"] = "completed"
             return EndSessionResponse(overall_score=0, summary=empty_result["summary"], evaluations=[])
 
         result = await run_in_threadpool(llm.evaluate_session, session["track"], session["role"], session["history"])
@@ -327,6 +382,7 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
             result["diagram_evaluation"] = diagram_eval
 
         await run_in_threadpool(persist_evaluation, req.session_id, result)
+        session["status"] = "completed"
 
     return EndSessionResponse(
         overall_score=result.get("overall_score", 5),

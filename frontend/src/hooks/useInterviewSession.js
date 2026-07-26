@@ -52,7 +52,7 @@ function isDiagramMeaningful(elements) {
  * @param boardRef      ref to the SystemDesignBoard, used to read diagram elements
  * @param onQuestionContext  called with (QuestionContext, sessionId) when the problem is first assigned
  */
-export function useInterviewSession({ track, boardRef, onQuestionContext }) {
+export function useInterviewSession({ track, boardRef, onQuestionContext, resumeSessionId, onSessionIdReady }) {
   const navigate = useNavigate();
 
   const [sessionId, setSessionId] = useState(null);
@@ -63,10 +63,13 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
   const [answerText, setAnswerText] = useState("");
   const [diagramWarning, setDiagramWarning] = useState(null);
   const [sessionFull, setSessionFull] = useState(false);
+  const [initialDiagramElements, setInitialDiagramElements] = useState(null);
 
   const transcriptEndRef = useRef(null);
   const initDoneRef = useRef(false);
   const newMessageWhileMutedRef = useRef(false);
+  const recordingBaseTextRef = useRef("");
+  const spaceRecordingRef = useRef(false);
 
   const { isSupported, isListening, transcript, interimTranscript, start, stop, reset } =
     useSpeechRecognition();
@@ -89,7 +92,11 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
   }, [speak, stopSpeech]);
 
   useEffect(() => {
-    if (isListening) setAnswerText(`${transcript} ${interimTranscript}`.trim());
+    if (isListening) {
+      const base = recordingBaseTextRef.current;
+      const dictated = `${transcript} ${interimTranscript}`.trim();
+      setAnswerText(dictated ? `${base} ${dictated}`.trim() : base);
+    }
   }, [isListening, transcript, interimTranscript]);
 
   useEffect(() => {
@@ -103,6 +110,31 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) { navigate("/login", { replace: true }); return; }
+
+        if (resumeSessionId) {
+          try {
+            const resumed = await api.resumeSession(resumeSessionId);
+            setSessionId(resumed.session_id);
+            setMessages(resumed.history.map((m) => ({
+              role: m.role === "candidate" ? "candidate" : "interviewer",
+              text: m.content,
+            })));
+            const lastInterviewer = [...resumed.history].reverse().find((m) => m.role === "interviewer");
+            if (lastInterviewer) lastInterviewerTextRef.current = lastInterviewer.content;
+            if (resumed.question_context && onQuestionContext) {
+              onQuestionContext(resumed.question_context, resumed.session_id);
+            }
+            if (resumed.diagram_elements?.length) {
+              setInitialDiagramElements(resumed.diagram_elements);
+            }
+            onSessionIdReady?.(resumed.session_id);
+            return;
+          } catch {
+            // Resume failed (session gone/completed/backend restarted) — fall
+            // through to starting a fresh session below.
+          }
+        }
+
         const jd = sessionStorage.getItem("interview_jd") || undefined;
         sessionStorage.removeItem("interview_jd");
         const res = await api.startSession({ track, role: "Software Engineer", job_description: jd });
@@ -110,6 +142,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
         setMessages([{ role: "interviewer", text: res.question }]);
         speakIfUnmuted(res.question);
         api.trackEvent("session_start", { sessionId: res.session_id, properties: { track } });
+        onSessionIdReady?.(res.session_id);
       } catch (err) {
         if (err.message?.includes("401") || err.message?.includes("403")) {
           navigate("/login", { replace: true }); return;
@@ -127,30 +160,58 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleStartRecording = useCallback(() => { setAnswerText(""); reset(); start(); }, [reset, start]);
+  // Preserves any manually typed text as a base and appends dictation after
+  // it, instead of wiping the textarea when recording starts.
+  const handleStartRecording = useCallback(() => {
+    recordingBaseTextRef.current = answerText.trim();
+    reset();
+    start();
+  }, [answerText, reset, start]);
 
-  // Spacebar push-to-talk: hold to record, release to stop
+  const handleStopRecording = useCallback(() => {
+    stop();
+  }, [stop]);
+
+  // Spacebar push-to-talk: hold to record, release to stop.
+  // Once we've started recording via the spacebar, keyup always stops it —
+  // regardless of what element has focus by the time the key is released —
+  // so a focus change mid-hold (e.g. the code editor grabbing focus) can't
+  // strand recording on forever.
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.code !== "Space" || e.repeat) return;
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       e.preventDefault();
-      if (!isListening && isSupported) handleStartRecording();
+      if (!isListening && isSupported) {
+        spaceRecordingRef.current = true;
+        handleStartRecording();
+      }
     };
     const onKeyUp = (e) => {
       if (e.code !== "Space") return;
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (isListening) stop();
+      if (spaceRecordingRef.current) {
+        spaceRecordingRef.current = false;
+        handleStopRecording();
+      }
+    };
+    // Safety net: if the window loses focus while Space is held (alt-tab,
+    // a permission prompt, devtools), the keyup event can be lost entirely.
+    const onBlur = () => {
+      if (spaceRecordingRef.current) {
+        spaceRecordingRef.current = false;
+        handleStopRecording();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [isListening, isSupported, handleStartRecording, stop]);
+  }, [isListening, isSupported, handleStartRecording, handleStopRecording]);
 
   /**
    * Send a candidate message.
@@ -178,6 +239,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
 
     setMessages((prev) => [...prev, { role: "candidate", text: answer }]);
     setAnswerText("");
+    recordingBaseTextRef.current = "";
     reset();
     setSending(true);
 
@@ -201,6 +263,14 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
       setSending(false);
     }
   };
+
+  // Debounced-by-caller autosave for the system-design board — best-effort,
+  // never surfaced to the candidate if it fails (a missed autosave isn't
+  // worth interrupting the interview over).
+  const saveDiagram = useCallback((elements) => {
+    if (!sessionId) return;
+    api.saveDiagram({ session_id: sessionId, elements }).catch(() => {});
+  }, [sessionId]);
 
   const handleEnd = async () => {
     if (!sessionId || ending) return;
@@ -255,6 +325,8 @@ export function useInterviewSession({ track, boardRef, onQuestionContext }) {
     diagramWarning,
     setDiagramWarning,
     sessionFull,
+    initialDiagramElements,
+    saveDiagram,
     handleStartRecording,
     handleSend,
     handleEnd,

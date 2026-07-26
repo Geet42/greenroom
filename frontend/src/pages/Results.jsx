@@ -108,15 +108,24 @@ export default function Results() {
                         </div>
                       ))}
                     </div>
-                    {star.missing_elements?.length > 0 && (
-                      <div className={`mt-4 transition-opacity duration-500 ${losgannDismissed ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-                        <p className="text-xs font-medium uppercase tracking-wide text-coral">Missing / vague</p>
-                        <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-mute">
-                          {star.missing_elements.map((m, i) => <li key={i}>{m}</li>)}
-                        </ul>
-                      </div>
-                    )}
                     <Losgann missingElements={star.missing_elements} onDismiss={() => setLosgannDismissed(true)} />
+                  </div>
+                );
+              })()}
+
+              {/* Gap analysis — separate section, shown once the frog's callout is dismissed */}
+              {session.star_analysis && losgannDismissed && (() => {
+                const star = typeof session.star_analysis === "string"
+                  ? JSON.parse(session.star_analysis)
+                  : session.star_analysis;
+                if (!star.missing_elements?.length) return null;
+                return (
+                  <div className="mt-6 rounded-2xl border border-white/10 bg-panel p-6 animate-in fade-in duration-500">
+                    <h2 className="font-display text-xl">Gap analysis</h2>
+                    <p className="text-xs font-medium uppercase tracking-wide text-coral mt-3">Missing / vague</p>
+                    <ul className="mt-2 list-inside list-disc space-y-1 text-sm text-mute">
+                      {star.missing_elements.map((m, i) => <li key={i}>{m}</li>)}
+                    </ul>
                   </div>
                 );
               })()}

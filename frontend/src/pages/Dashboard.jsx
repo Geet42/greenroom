@@ -5,6 +5,23 @@ import Footer from "../components/Footer";
 import { supabase } from "../lib/supabaseClient";
 import { api } from "../lib/api";
 
+// Runs `fn` over `items` with at most `limit` in flight at once. Deleting
+// many sessions at full concurrency (one fetch per item, unbounded) can
+// overwhelm the local network stack and surface as transient failures for
+// requests that would have succeeded run more gradually.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 const TRACKS = [
   {
     id: "behavioral",
@@ -45,9 +62,24 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [endingId, setEndingId] = useState(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deletingBulk, setDeletingBulk] = useState(false);
+  const userIdRef = useRef(null);
+
+  const fetchSessions = async () => {
+    const userId = userIdRef.current;
+    if (!userId) return;
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, track, role, overall_score, created_at, status")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (!error) setSessions(data ?? []);
+    return { data, error };
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -57,19 +89,13 @@ export default function Dashboard() {
       if (mounted) setUserEmail(userData?.user?.email ?? "");
 
       const userId = userData?.user?.id;
+      userIdRef.current = userId ?? null;
       if (!userId) {
         if (mounted) setLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
-        .from("sessions")
-        .select("id, track, role, overall_score, created_at, status")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(10);
-
-      if (!error && mounted) setSessions(data ?? []);
+      await fetchSessions();
       if (mounted) setLoading(false);
     }
 
@@ -84,11 +110,40 @@ export default function Dashboard() {
     setDeletingId(sessionId);
     try {
       await api.deleteSession(sessionId);
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      // Re-sync with the backend instead of trusting the optimistic local
+      // filter — a partial/failed server-side delete must not look successful.
+      await fetchSessions();
     } catch {
       alert("Failed to delete session. Please try again.");
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleEndSession = async (sessionId) => {
+    if (!window.confirm("End this session now? You'll get a scored evaluation based on what's been answered so far.")) return;
+    setEndingId(sessionId);
+    try {
+      await api.endSession({ session_id: sessionId });
+      await fetchSessions();
+    } catch {
+      alert("Failed to end session. Please try again.");
+    } finally {
+      setEndingId(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (sessions.length === 0) return;
+    if (!window.confirm(`Delete all ${sessions.length} sessions and their transcripts? This cannot be undone.`)) return;
+    setDeletingBulk(true);
+    try {
+      await mapWithConcurrency(sessions, 3, (s) => api.deleteSession(s.id));
+      await fetchSessions();
+    } catch {
+      alert("Some sessions could not be deleted. Please try again.");
+    } finally {
+      setDeletingBulk(false);
     }
   };
 
@@ -115,8 +170,8 @@ export default function Dashboard() {
     if (!window.confirm(`Delete ${selectedIds.size} session${selectedIds.size > 1 ? "s" : ""}? This cannot be undone.`)) return;
     setDeletingBulk(true);
     try {
-      await Promise.all([...selectedIds].map((id) => api.deleteSession(id)));
-      setSessions((prev) => prev.filter((s) => !selectedIds.has(s.id)));
+      await mapWithConcurrency([...selectedIds], 3, (id) => api.deleteSession(id));
+      await fetchSessions();
       exitSelectionMode();
     } catch {
       alert("Some sessions could not be deleted. Please try again.");
@@ -224,12 +279,21 @@ export default function Dashboard() {
                       </button>
                     </>
                   ) : (
-                    <button
-                      onClick={() => setSelectionMode(true)}
-                      className="rounded-full border border-white/10 px-4 py-1.5 text-sm text-mute transition hover:border-coral/40 hover:text-coral"
-                    >
-                      Select sessions
-                    </button>
+                    <>
+                      <button
+                        onClick={handleDeleteAll}
+                        disabled={deletingBulk}
+                        className="text-sm text-mute transition hover:text-coral disabled:opacity-40"
+                      >
+                        {deletingBulk ? "Deleting..." : "Delete all"}
+                      </button>
+                      <button
+                        onClick={() => setSelectionMode(true)}
+                        className="rounded-full border border-white/10 px-4 py-1.5 text-sm text-mute transition hover:border-coral/40 hover:text-coral"
+                      >
+                        Select sessions
+                      </button>
+                    </>
                   )}
                 </div>
               )}
@@ -242,9 +306,10 @@ export default function Dashboard() {
                 No sessions yet. Pick a track above to run your first mock interview.
               </div>
             ) : (
-              <div className="mt-4 overflow-hidden rounded-2xl border border-white/10">
+              <div className="mt-4 rounded-2xl border border-white/10">
+                <div className="max-h-[28rem] overflow-y-auto rounded-2xl">
                 <table className="w-full text-left text-sm">
-                  <thead className="bg-panel text-mute">
+                  <thead className="sticky top-0 z-10 bg-panel text-mute">
                     <tr>
                       {selectionMode && <th className="px-4 py-3 w-8"></th>}
                       <th className="px-4 py-3 font-medium">Track</th>
@@ -252,7 +317,7 @@ export default function Dashboard() {
                       <th className="px-4 py-3 font-medium">Score</th>
                       <th className="px-4 py-3 font-medium">Status</th>
                       <th className="px-4 py-3 font-medium">Date</th>
-                      <th className="px-4 py-3 font-medium" colSpan={2}></th>
+                      <th className="px-4 py-3 font-medium" colSpan={3}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -281,9 +346,29 @@ export default function Dashboard() {
                           {new Date(s.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <Link to={`/results/${s.id}`} className="text-amber hover:underline">
-                            View
-                          </Link>
+                          {s.status === "active" ? (
+                            <Link
+                              to={`/interview?track=${s.track}&session=${s.id}`}
+                              className="text-amber hover:underline"
+                            >
+                              Continue
+                            </Link>
+                          ) : (
+                            <Link to={`/results/${s.id}`} className="text-amber hover:underline">
+                              View
+                            </Link>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {s.status === "active" && (
+                            <button
+                              onClick={() => handleEndSession(s.id)}
+                              disabled={endingId === s.id}
+                              className="text-sm text-mute transition hover:text-sage disabled:opacity-50"
+                            >
+                              {endingId === s.id ? "Ending..." : "End session"}
+                            </button>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button
@@ -298,6 +383,7 @@ export default function Dashboard() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>

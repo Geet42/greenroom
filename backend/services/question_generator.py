@@ -67,9 +67,17 @@ program>",
 that solves it — just the function, not a full program>",
   "calls": ["<call expression using function_name, e.g. two_sum([2, 7, 11, 15], 9)>", ...at \
 least 5 calls, the last 2 covering edge cases>],
-  "claimed_outputs": ["<the value you believe call 1 returns, as a Python literal>", ...]
+  "claimed_outputs": ["<the value you believe call 1 returns, as a Python literal>", ...],
+  "constraints": ["<one constraint per entry, LeetCode-style, e.g. '2 <= nums.length <= 10^4'>", \
+...at least 2-3 covering input size/range/uniqueness assumptions>],
+  "examples": [
+    {{"input": "<a call expression from \\"calls\\" above, verbatim>", "output": "<its expected \
+result as a readable literal>", "explanation": "<one sentence, or \\"\\" if not needed>"}},
+    ...2 of the entries from "calls", written up as worked examples
+  ]
 }}
-"claimed_outputs" must have exactly one entry per "calls" entry, in the same order."""
+"claimed_outputs" must have exactly one entry per "calls" entry, in the same order. Every \
+"examples" input must be copied verbatim from "calls" — do not invent new call expressions here."""
 
 _SECOND_SOLUTION_SYSTEM = """\
 You are given a coding problem. Write a complete, correct Python 3 function definition named \
@@ -79,6 +87,18 @@ ONLY the Python code, no markdown fences, no explanation."""
 
 _MAX_CATALOG_ENTRIES = 200
 _TOPIC_PERSIST_CAP = 25  # don't keep stacking generated problems onto an already-deep topic
+
+# Two Sum specifically is the single most overrepresented "safe default" in
+# every LLM's training data — empirically, it gets picked for almost any
+# generic-ish candidate intro regardless of prompt wording telling the model
+# to personalize (confirmed against real production sessions: "I'm a Java
+# SWE, give me a question" still produced Two Sum). A word-count/signal
+# heuristic on the intro can't fix this — the bias holds even with some real
+# content. The only reliable fix is structural: don't let the model choose it.
+# It's still fully reachable via the random bank picker (_has_real_signal
+# gate above) and via direct reuse if a candidate explicitly asks for it by
+# name in conversation.
+_EXCLUDED_FROM_AUTO_PICK = {"two-sum"}
 
 
 def _strip_fences(text: str) -> str:
@@ -153,6 +173,22 @@ def _ask_llm_fallback(system: str, user: str, temperature: float, max_tokens: in
     ))
 
 
+_MIN_INTRO_WORDS = 6  # below this, there's no real signal to reason about
+
+
+def _has_real_signal(candidate_intro: str) -> bool:
+    """True if the intro actually says something about the candidate's
+    background, as opposed to a content-free request like "give me my first
+    DSA question" or "next". Below this bar, asking the LLM to "pick what
+    fits this candidate" gives it nothing to differentiate on, and it
+    reliably converges on the same "obvious" answer (Two Sum) every time —
+    confirmed empirically, not theoretical. Skipping straight to the
+    genuinely-random bank picker in that case is both cheaper (no LLM call)
+    and actually delivers the variety the LLM path was supposed to provide."""
+    words = [w for w in re.findall(r"[a-zA-Z']+", candidate_intro) if len(w) > 2]
+    return len(words) >= _MIN_INTRO_WORDS
+
+
 async def select_or_generate_question(role: str, candidate_intro: str = "") -> dict | None:
     """Main entry point. Returns a question dict (bank-shaped) or None if even
     the existing-bank fallback has nothing for this track — callers should
@@ -168,7 +204,16 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
     if not technical:
         return None
 
-    catalog = _build_catalog(technical)
+    if not _has_real_signal(candidate_intro):
+        picked = await asyncio.to_thread(question_bank.pick_question, "technical", "python")
+        if picked:
+            return picked
+        # Fall through to the LLM path only if the random picker somehow
+        # found nothing (bank empty/misconfigured) — better than returning
+        # None outright and leaving the candidate with no problem at all.
+
+    catalog_pool = [q for q in technical if q["id"] not in _EXCLUDED_FROM_AUTO_PICK]
+    catalog = _build_catalog(catalog_pool)
     system = _DECIDE_OR_GENERATE_SYSTEM.format(
         role=role, candidate_intro=candidate_intro or "(not provided)", catalog=catalog,
     )
@@ -189,7 +234,12 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         return question_bank.pick_question("technical", language="python")
 
     if action == "use_existing":
-        found = question_bank.get_question(spec.get("id", ""))
+        picked_id = spec.get("id", "")
+        if picked_id in _EXCLUDED_FROM_AUTO_PICK:
+            # Shouldn't happen (it's not in the catalog we showed), but the
+            # model can hallucinate an id it never saw — don't trust it blind.
+            return question_bank.pick_question("technical", language="python")
+        found = question_bank.get_question(picked_id)
         return found or question_bank.pick_question("technical", language="python")
 
     if action != "generate":
@@ -219,6 +269,21 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
             return question_bank.pick_question("technical", language="python")
 
     tests = [{"call": c, "expected": o} for c, o in zip(calls, actual_outputs)]
+
+    # constraints/examples are cosmetic (never used for grading), so a
+    # malformed or missing value here shouldn't sink an otherwise-verified
+    # question — fall back to empty rather than rejecting it.
+    constraints = spec.get("constraints") or []
+    if not isinstance(constraints, list):
+        constraints = []
+    raw_examples = spec.get("examples") or []
+    valid_calls = set(calls)
+    examples = [
+        {"input": e.get("input", ""), "output": e.get("output", ""), "explanation": e.get("explanation", "")}
+        for e in raw_examples
+        if isinstance(e, dict) and e.get("input") in valid_calls
+    ]
+
     question = {
         "id": _slugify(title),
         "track": "technical",
@@ -230,6 +295,8 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         "languages": ["python"],
         "tests": tests,
         "visible_count": min(3, len(tests)),
+        "constraints": constraints,
+        "examples": examples,
     }
 
     # Persistence is the expensive, durable commitment (every future candidate
@@ -280,6 +347,8 @@ def _persist_question(question: dict) -> None:
             "function_name": question["function_name"],
             "languages": question["languages"],
             "tests": question["tests"],
+            "constraints": question.get("constraints") or [],
+            "examples": question.get("examples") or [],
         }).execute()
         question_bank.refresh()
     except Exception:

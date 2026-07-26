@@ -41,9 +41,17 @@ line by itself, followed by raw {language} source code — no markdown fences, n
 explanation anywhere in your reply.
 
 {boilerplate_marker}
-Idiomatic {language} starter code for the candidate's editor — just the class/method signature \
-with an empty/TODO body, following standard LeetCode conventions for this language (e.g. Java: \
-`class Solution {{ public int[] twoSum(int[] nums, int target) {{ }} }}`).
+Idiomatic {language} starter code for the candidate's editor — just the class/method signature, \
+following standard LeetCode conventions for this language:
+- Java: `class Solution {{ public int[] twoSum(int[] nums, int target) {{ }} }}`
+- C++: `class Solution {{ public: vector<int> twoSum(vector<int>& nums, int target) {{ }} }};`
+Convert the method name to the idiomatic naming convention for {language} (camelCase), even \
+though the reference function_name below may be snake_case — e.g. `binary_search` becomes \
+`binarySearch`.
+The body must be a PLACEHOLDER THAT STILL COMPILES ON ITS OWN, before any candidate edits it: \
+return a trivially-typed default value matching the real return type (e.g. `return 0;`, \
+`return null;`, `return false;`, `return new int[0];`, `return {{}};` for C++ containers) — never \
+leave a non-void method with an empty body, and never leave real solution logic in it.
 
 {solution_marker}
 A COMPLETE, correct {language} implementation that actually solves the problem (same public \
@@ -179,11 +187,54 @@ def _parse_result_lines(stdout: str, n_expected: int) -> list[dict] | None:
     return results
 
 
-async def _verify(language: str, spec: dict, n_tests: int) -> bool:
+def merge_cpp_sources(*pieces: str) -> str:
+    """The harness is instructed to bring its own `#include <bits/stdc++.h>` /
+    `using namespace std;`, but the boilerplate/candidate class is
+    concatenated BEFORE the harness — so when it's compiled, those types
+    (vector, string, stack, ...) aren't declared yet and it fails to compile,
+    even though the exact same file compiles fine once the harness's headers
+    happen to already be there for a later test. Hoist them to the very top
+    instead, same fix as merge_java_sources for imports."""
+    header = "#include <bits/stdc++.h>\nusing namespace std;\n"
+    bodies = []
+    for piece in pieces:
+        body_lines = [
+            line for line in piece.splitlines()
+            if line.strip() not in ("#include <bits/stdc++.h>", "using namespace std;")
+        ]
+        bodies.append("\n".join(body_lines))
+    return header + "\n\n" + "\n\n".join(bodies)
+
+
+def merge_sources(language: str, pieces: list[str]) -> str:
     if language == "java":
-        full_source = merge_java_sources(spec["solution"], spec["harness"])
-    else:
-        full_source = spec["solution"] + "\n\n" + spec["harness"]
+        return merge_java_sources(*pieces)
+    if language == "cpp":
+        return merge_cpp_sources(*pieces)
+    return "\n\n".join(pieces)
+
+
+async def _compiles(language: str, source: str) -> bool:
+    """Runs `source` through the sandbox and checks it doesn't blow up. Used
+    to make sure the BOILERPLATE itself — not just the reference solution —
+    is valid {language} on its own, before a candidate has typed anything.
+    The generated harness wraps every test call in its own try/catch (per the
+    system prompt), so a genuine runtime exception from the stub's placeholder
+    body is caught and reported as a per-test failure rather than a crash —
+    a nonzero exit with stderr here means the source didn't compile at all."""
+    result = await piston.run_code(_PISTON_LANG[language], _VERSION[language], source, stdin="")
+    raw = result.get("run", {})
+    if raw.get("stderr") and raw.get("code", 0) != 0:
+        return False
+    return True
+
+
+async def _verify(language: str, spec: dict, n_tests: int) -> bool:
+    boilerplate_source = merge_sources(language, [spec["boilerplate"], spec["harness"]])
+    if not await _compiles(language, boilerplate_source):
+        return False
+
+    full_source = merge_sources(language, [spec["solution"], spec["harness"]])
     result = await piston.run_code(_PISTON_LANG[language], _VERSION[language], full_source, stdin="")
     raw = result.get("run", {})
     if raw.get("stderr") and raw.get("code", 0) != 0:
@@ -194,13 +245,24 @@ async def _verify(language: str, spec: dict, n_tests: int) -> bool:
     return all(r.get("passed") for r in results)
 
 
+_GENERATION_ATTEMPTS = 3
+
+
 async def get_or_generate(question: dict, language: str) -> dict | None:
     """Returns {"boilerplate": ..., "harness": ...} for this (question, language)
     pair, generating and sandbox-verifying it on first use and persisting the
-    result to Supabase for every future session. Returns None if generation or
-    verification fails — callers should treat that exactly like "this language
-    isn't supported for this problem" (which, from the candidate's perspective,
-    it isn't, at least not yet)."""
+    result to Supabase for every future session. Returns None if every attempt
+    fails — callers should treat that exactly like "this language isn't
+    supported for this problem" (which, from the candidate's perspective, it
+    isn't, at least not yet).
+
+    Retries generation up to _GENERATION_ATTEMPTS times on verification
+    failure: LLM-generated harness code has a real, measured failure rate
+    (observed ~40-60% first-try pass rate for Java/C++ — genuine bugs like a
+    variable declared inside one block and referenced outside it, which is
+    valid in some languages but not others). Since each attempt is an
+    independent generation, retrying meaningfully improves the odds of
+    landing a working harness instead of giving up on the first flub."""
     if language not in ("java", "cpp"):
         return None
 
@@ -209,17 +271,20 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         return cached
 
     import asyncio
-    spec = await asyncio.to_thread(_generate, language, question)
-    if not spec:
-        return None
+    for attempt in range(1, _GENERATION_ATTEMPTS + 1):
+        spec = await asyncio.to_thread(_generate, language, question)
+        if not spec:
+            continue
 
-    ok = await _verify(language, spec, len(question["tests"]))
-    if not ok:
-        return None
+        ok = await _verify(language, spec, len(question["tests"]))
+        if not ok:
+            continue
 
-    harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
-    await asyncio.to_thread(_persist, question["id"], language, harness_data)
-    return harness_data
+        harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
+        await asyncio.to_thread(_persist, question["id"], language, harness_data)
+        return harness_data
+
+    return None
 
 
 def _persist(question_id: str, language: str, harness_data: dict) -> None:
@@ -262,8 +327,13 @@ def _persist(question_id: str, language: str, harness_data: dict) -> None:
 #     currently), calls are positional so this is LLM-inferred like the plain-
 #     function group, just asked to emit a class instead of a bare function.
 
-_SIGNATURE_LANG_LABEL = {"python": "Python", "node": "JavaScript"}
-_SIGNATURE_PLACEHOLDER = {"python": "pass", "node": "// TODO: implement"}
+_SIGNATURE_LANG_LABEL = {"python": "Python", "node": "JavaScript", "java": "Java", "cpp": "C++"}
+_SIGNATURE_PLACEHOLDER = {
+    "python": "pass",
+    "node": "// TODO: implement",
+    "java": "// TODO: implement",
+    "cpp": "// TODO: implement",
+}
 
 _SIGNATURE_SYSTEM = """\
 You write starter code for a coding interview problem, for the candidate's code editor. Reply \
@@ -283,7 +353,20 @@ The problem statement usually shows the canonical call literally, e.g. `two_sum(
 — if it does, you MUST reuse those exact parameter names verbatim, in the same order. Only \
 invent your own meaningful parameter names if the problem statement does not spell out a \
 signature. Do not name parameters after the literal test-call arguments below (those are only \
-there to show argument count/shape, not names)."""
+there to show argument count/shape, not names).
+
+{class_wrapper_note}"""
+
+_SIGNATURE_CLASS_WRAPPER_NOTE = {
+    "python": "",
+    "node": "",
+    "java": "Follow standard LeetCode conventions: wrap the function in "
+    "`class Solution {{ public <ReturnType> {function_name}(...) {{ }} }}` with a real, "
+    "inferred return type and parameter types (never `var`/`Object`).",
+    "cpp": "Follow standard LeetCode conventions: wrap the function in "
+    "`class Solution {{ public: <ReturnType> {function_name}(...) {{ }} }};` with a real, "
+    "inferred return type and parameter types.",
+}
 
 
 def _generate_signature(language: str, method_name: str, question: dict) -> str | None:
@@ -294,6 +377,7 @@ def _generate_signature(language: str, method_name: str, question: dict) -> str 
         language=_SIGNATURE_LANG_LABEL[language],
         placeholder=_SIGNATURE_PLACEHOLDER[language],
         function_name=method_name,
+        class_wrapper_note=_SIGNATURE_CLASS_WRAPPER_NOTE[language].format(function_name=method_name),
     )
     tests_preview = "\n".join(f'  {t["call"]}  ->  {t["expected"]}' for t in question["tests"])
     user = f"Problem: {question['title']}\n\n{question['prompt']}\n\nTest calls:\n{tests_preview}"
@@ -413,6 +497,12 @@ def _verify_signature(language: str, code: str, function_name: str) -> bool:
             re.compile(rf"class\s+{re.escape(function_name)}\b"),
         ]
         return any(p.search(code) for p in patterns)
+    if language in ("java", "cpp"):
+        patterns = [
+            re.compile(rf"\b{re.escape(function_name)}\s*\([^;{{]*\)\s*\{{"),
+            re.compile(rf"class\s+{re.escape(function_name)}\b"),
+        ]
+        return any(p.search(code) for p in patterns)
     return False
 
 
@@ -421,7 +511,7 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
     Python or JS ("node"). Returns None if generation/verification fails —
     callers should fall back to the generic starter code, same as before this
     feature existed."""
-    if language not in ("python", "node"):
+    if language not in ("python", "node", "java", "cpp"):
         return None
 
     cached = (question.get("signatures") or {}).get(language)
@@ -434,7 +524,10 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
     import asyncio
 
     code: str | None = None
-    if class_name and question.get("tests"):
+    # The deterministic (no-LLM) builder produces untyped signatures, which
+    # is only valid for Python/JS — Java/C++ need real types, so those always
+    # go through the LLM path below.
+    if language in ("python", "node") and class_name and question.get("tests"):
         params = _extract_kwarg_names(question["tests"][0]["call"], method_name)
         if params is not None:
             candidate = _build_class_signature(language, class_name, method_name, params)
@@ -442,7 +535,10 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
                 code = candidate
 
     if code is None:
-        code = await asyncio.to_thread(_generate_signature, language, method_name, question)
+        for _attempt in range(_GENERATION_ATTEMPTS):
+            code = await asyncio.to_thread(_generate_signature, language, method_name, question)
+            if code:
+                break
 
     if not code:
         return None

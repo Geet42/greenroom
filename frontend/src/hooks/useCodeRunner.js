@@ -64,8 +64,17 @@ export function useCodeRunner() {
   // sessionId is passed per-call so the hook doesn't need it at construction time
   const handleLanguageChange = async (newLanguage, sessionId) => {
     setLanguage(newLanguage);
-    setCode(STARTER_CODE[newLanguage]);
-    originalCodeRef.current[newLanguage] = STARTER_CODE[newLanguage];
+    // If we've already fetched question-specific boilerplate for this
+    // language before, show it immediately instead of flashing the generic
+    // starter — and don't stomp the cache, or switching away and back loses
+    // the real boilerplate for good.
+    const cached = originalCodeRef.current[newLanguage];
+    if (cached !== undefined) {
+      setCode(cached);
+    } else {
+      setCode(STARTER_CODE[newLanguage]);
+      originalCodeRef.current[newLanguage] = STARTER_CODE[newLanguage];
+    }
     setTestResults(null);
     setRevealedCount(0);
     setBoilerplateNote(null);

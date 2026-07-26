@@ -77,6 +77,24 @@ class BoilerplateResponse(BaseModel):
     supported: bool = True
 
 
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ResumeSessionResponse(BaseModel):
+    session_id: str
+    track: str
+    history: List[HistoryMessage]
+    question_context: Optional[QuestionContext] = None
+    diagram_elements: List[dict] = []
+
+
+class SaveDiagramRequest(BaseModel):
+    session_id: str
+    elements: List[dict] = Field(default_factory=list, max_length=5000)
+
+
 class RunCodeRequest(BaseModel):
     language: str = Field(min_length=1, max_length=50)
     version: str = Field(min_length=1, max_length=50)

@@ -126,7 +126,15 @@ TRACK_PERSONAS = {
         "CRITICAL: never state the time or space complexity of any solution (no Big-O, no "
         "'runs in linear/constant time', etc.) — always ask the candidate to derive and justify "
         "it themselves. If you'd normally say 'that's O(n)', instead ask 'what's the time "
-        "complexity of that, and why?'"
+        "complexity of that, and why?' "
+        "CRITICAL: the candidate is assigned exactly ONE coding problem for the entire session — "
+        "the code editor cannot be swapped to a new problem, so once a problem has been given, "
+        "NEVER introduce a second one or say anything like 'let's move on to another problem/"
+        "challenge'. Once the coding problem is assigned, every remaining turn must be a follow-up "
+        "on THAT SAME problem — its approach, complexity, edge cases, trade-offs, alternative "
+        "implementations, or how it'd change under different constraints. If you've run out of "
+        "follow-ups on the coding problem, transition into behavioral/experience questions instead "
+        "of a new coding problem."
     ),
     "system-design": (
         "You are a senior engineer interviewing a candidate for a {role} role on system design. "
@@ -137,7 +145,13 @@ TRACK_PERSONAS = {
         "Keep responses to one or two sentences. Never break character or mention you are an AI. "
         "CRITICAL: never reveal or recommend a specific architectural decision (which database, "
         "caching strategy, queueing system, or scaling pattern to use) — always ask the candidate "
-        "to propose and defend their own choice instead of suggesting one yourself."
+        "to propose and defend their own choice instead of suggesting one yourself. "
+        "CRITICAL: the candidate is assigned exactly ONE system design problem for the entire "
+        "session, and their diagram is graded against THAT problem's expected components — "
+        "NEVER introduce a second design problem or say anything like 'let's design something "
+        "else/a different system'. Once the problem is presented, every remaining turn must probe "
+        "THAT SAME design (scale, trade-offs, data models, failure modes, or how it changes under "
+        "different constraints)."
     ),
 }
 
@@ -271,7 +285,10 @@ def opening_message(track: str, role: str) -> str:
         raise
 
 
-def next_question(track: str, role: str, history: list[dict], assigned_question: dict | None = None, job_description: str | None = None) -> str:
+def next_question(
+    track: str, role: str, history: list[dict], assigned_question: dict | None = None,
+    job_description: str | None = None, is_new_assignment: bool = False,
+) -> str:
     """
     LangChain LCEL interview chain:
       ChatPromptTemplate(system + history + latest human turn)
@@ -281,6 +298,12 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
 
     Output passes through the guardrail layer (services.guardrail) before it
     reaches the candidate — see that module for why this exists.
+
+    is_new_assignment: True only on the turn `assigned_question` is first being
+    presented. On every later turn, the platform can't actually swap the code
+    editor to a different problem, so the guardrail also blocks the model from
+    trying to introduce a second one — prompt-hardening alone isn't reliable
+    enough (see TRACK_PERSONAS["technical"]), so this is defense in depth.
 
     assigned_question: for "technical" sessions, a problem pulled from the
     curated question bank (services.question_bank) — when present, the
@@ -340,14 +363,10 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
     lc_history = _history_to_lc(history[:-1])  # all but last turn
     last_turn = history[-1]["content"] if history else ""
 
-    def _ask(temperature: float = 0.7, corrective: bool = False) -> str:
+    def _ask(temperature: float = 0.7, corrective: str | None = None) -> str:
         sys_prompt = system_prompt
         if corrective:
-            sys_prompt += (
-                "\n\nIMPORTANT: your previous draft leaked information the candidate must "
-                "figure out themselves (an exact complexity or a specific architectural "
-                "recommendation). Rewrite it so it ONLY asks a question — never states the answer."
-            )
+            sys_prompt += f"\n\nIMPORTANT: {corrective}"
         try:
             p = ChatPromptTemplate.from_messages([
                 ("system", sys_prompt),
@@ -369,7 +388,29 @@ def next_question(track: str, role: str, history: list[dict], assigned_question:
     import time as _time
     _start = _time.monotonic()
     draft = _ask()
-    result = guardrail.sanitize(draft, track, regenerate_fn=lambda: _ask(temperature=0.4, corrective=True))
+    result = guardrail.sanitize(
+        draft, track,
+        regenerate_fn=lambda: _ask(temperature=0.4, corrective=(
+            "your previous draft leaked information the candidate must figure out themselves "
+            "(an exact complexity or a specific architectural recommendation). Rewrite it so it "
+            "ONLY asks a question — never states the answer."
+        )),
+    )
+
+    if track in ("technical", "system-design") and assigned_question and not is_new_assignment:
+        what = "coding problem" if track == "technical" else "system design problem"
+        locked_ui = "the code editor cannot switch to a different one" if track == "technical" \
+            else "their diagram is graded against this one problem's expected components"
+        result = guardrail.sanitize_no_new_problem(
+            result,
+            regenerate_fn=lambda: _ask(temperature=0.4, corrective=(
+                f"your previous draft tried to introduce a NEW {what}. The candidate has "
+                f"exactly ONE assigned problem for this entire session and {locked_ui} — "
+                f"rewrite your response so it follows up on the ALREADY ASSIGNED problem instead: "
+                f"{assigned_question['prompt']}"
+            )),
+        )
+
     log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
     return result
 

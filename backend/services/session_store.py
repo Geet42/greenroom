@@ -74,6 +74,8 @@ def get_session(session_id: str) -> dict | None:
         "assigned_question": assigned_question,
         "next_sequence_no": len(history),
         "last_activity_at": last_activity,
+        "status": row.get("status") or "active",
+        "diagram_elements": row.get("diagram_elements") or [],
     }
     SESSIONS[session_id] = session
     return session

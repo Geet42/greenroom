@@ -43,6 +43,16 @@ def persist_assigned_question(session_id: str, question_id: str) -> None:
     sb.table("sessions").update({"assigned_question_id": question_id}).eq("id", session_id).execute()
 
 
+def persist_diagram(session_id: str, elements: list[dict]) -> None:
+    """Autosaved periodically while the candidate draws (see /interview/diagram),
+    so a refresh/resume mid system-design session restores the board, not just
+    the conversation."""
+    sb = get_supabase()
+    if not sb:
+        return
+    sb.table("sessions").update({"diagram_elements": elements}).eq("id", session_id).execute()
+
+
 def persist_message(session_id: str, role: str, content: str, sequence_no: int) -> None:
     sb = get_supabase()
     if not sb:
