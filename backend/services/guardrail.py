@@ -218,3 +218,30 @@ def sanitize_no_new_problem(draft: str, regenerate_fn) -> str:
         "Let's keep digging into the problem you're already working on — what's the time "
         "complexity of your current approach, and do you see any way to improve it?"
     )
+
+
+# ── Candidate-initiated question switch (technical track) ────────────────────
+# The one deliberate exception to the guard above: the CANDIDATE explicitly
+# asking for a different problem is a real signal the interviewer-side
+# guardrail can't distinguish from itself going off script, so it's detected
+# here instead and handled by routers.interview.post_message reassigning
+# session["assigned_question"] and passing is_new_assignment=True for that
+# turn — same mechanism the very first question uses, just candidate-driven
+# instead of automatic.
+
+_CANDIDATE_NEW_PROBLEM_PATTERNS = [
+    re.compile(r"\bnext\s+(question|problem|dsa|challenge)\b", re.IGNORECASE),
+    re.compile(r"\b(another|a\s+new|a\s+different)\s+(question|problem|challenge)\b", re.IGNORECASE),
+    re.compile(r"\bcan\s+(i|we)\s+(get|have|move\s+on\s+to)\s+(another|a\s+new|the\s+next)\b", re.IGNORECASE),
+    re.compile(r"\b(skip|change)\s+(this\s+)?(question|problem)\b", re.IGNORECASE),
+    re.compile(r"\bgive\s+me\s+(another|a\s+new|the\s+next)\s+(question|problem|challenge)\b", re.IGNORECASE),
+]
+
+
+def candidate_requests_new_problem(text: str) -> bool:
+    """True if the CANDIDATE's message is asking to switch to a different
+    problem — e.g. 'next question please', 'can I get a different problem'.
+    Deliberately regex-only (no LLM judge): false negatives here just mean a
+    normal follow-up turn happens instead, which is always a safe fallback,
+    so there's no need to pay for a judge call on every single message."""
+    return any(p.search(text) for p in _CANDIDATE_NEW_PROBLEM_PATTERNS)

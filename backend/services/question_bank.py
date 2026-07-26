@@ -86,6 +86,7 @@ def pick_question(
     language: str = "python",
     topic: str | None = None,
     difficulty: str | list[str] | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> dict | None:
     """Random question matching track/language(/topic/difficulty). None if nothing
     matches — callers should fall back to ad hoc LLM-generated problems in that case.
@@ -95,6 +96,10 @@ def pick_question(
     imported LeetCodeDataset batch (71/210) and aren't a great default mock-interview
     experience. Pass difficulty="hard" (or a list including it) once seniority-level
     selection is wired up.
+
+    exclude_ids: question ids to skip — e.g. ones already assigned earlier in
+    the same session (see "Next question" in routers/interview.py), so asking
+    for another problem doesn't risk re-serving the one just finished.
     """
     if difficulty is None:
         difficulty = ["easy", "medium"]
@@ -106,6 +111,7 @@ def pick_question(
         if q.get("track") == track and language in (q.get("languages") or [])
         and (topic is None or q.get("topic") == topic)
         and (q.get("difficulty") or "medium") in difficulty
+        and q["id"] not in (exclude_ids or set())
     ]
     return random.choice(candidates) if candidates else None
 

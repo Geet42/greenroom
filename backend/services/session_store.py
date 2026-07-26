@@ -76,6 +76,13 @@ def get_session(session_id: str) -> dict | None:
         "last_activity_at": last_activity,
         "status": row.get("status") or "active",
         "diagram_elements": row.get("diagram_elements") or [],
+        # Only the current one is recoverable from a rebuild — full skip
+        # history isn't persisted (see "Next question" in routers/interview.py) —
+        # so a "Next question" click right after a process restart could in
+        # theory re-serve a question skipped earlier in the same session.
+        # Rare edge case, not worth a migration for.
+        "asked_question_ids": {row["assigned_question_id"]} if row.get("assigned_question_id") else set(),
+        "candidate_intro": next((m["content"] for m in history if m["role"] == "candidate"), ""),
     }
     SESSIONS[session_id] = session
     return session

@@ -189,7 +189,9 @@ def _has_real_signal(candidate_intro: str) -> bool:
     return len(words) >= _MIN_INTRO_WORDS
 
 
-async def select_or_generate_question(role: str, candidate_intro: str = "") -> dict | None:
+async def select_or_generate_question(
+    role: str, candidate_intro: str = "", exclude_ids: set[str] | None = None,
+) -> dict | None:
     """Main entry point. Returns a question dict (bank-shaped) or None if even
     the existing-bank fallback has nothing for this track — callers should
     treat None the same as "no canonical problem available".
@@ -198,14 +200,21 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
     Without real per-candidate context the model has nothing to differentiate
     sessions on and tends to converge on the same "obvious" answer every time —
     pass this whenever you have it (i.e. call this after the candidate's first
-    reply, not at session start before they've said anything)."""
+    reply, not at session start before they've said anything).
+
+    exclude_ids: questions already assigned earlier in this session (see
+    "Next question" in routers/interview.py) — skipped everywhere so
+    requesting another problem can't just re-serve the one just finished."""
+    exclude_ids = exclude_ids or set()
+    fallback_pick = lambda: question_bank.pick_question("technical", language="python", exclude_ids=exclude_ids)  # noqa: E731
+
     all_questions = await asyncio.to_thread(question_bank._all_questions)
-    technical = [q for q in all_questions if q.get("track") == "technical"]
+    technical = [q for q in all_questions if q.get("track") == "technical" and q["id"] not in exclude_ids]
     if not technical:
         return None
 
     if not _has_real_signal(candidate_intro):
-        picked = await asyncio.to_thread(question_bank.pick_question, "technical", "python")
+        picked = await asyncio.to_thread(fallback_pick)
         if picked:
             return picked
         # Fall through to the LLM path only if the random picker somehow
@@ -225,25 +234,25 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         try:
             raw = await asyncio.to_thread(_ask_llm_fallback, system, user_msg, 1.0, 1200)
         except Exception:
-            return question_bank.pick_question("technical", language="python")
+            return fallback_pick()
 
     try:
         spec = json.loads(raw)
         action = spec.get("action")
     except json.JSONDecodeError:
-        return question_bank.pick_question("technical", language="python")
+        return fallback_pick()
 
     if action == "use_existing":
         picked_id = spec.get("id", "")
-        if picked_id in _EXCLUDED_FROM_AUTO_PICK:
+        if picked_id in _EXCLUDED_FROM_AUTO_PICK or picked_id in exclude_ids:
             # Shouldn't happen (it's not in the catalog we showed), but the
             # model can hallucinate an id it never saw — don't trust it blind.
-            return question_bank.pick_question("technical", language="python")
+            return fallback_pick()
         found = question_bank.get_question(picked_id)
-        return found or question_bank.pick_question("technical", language="python")
+        return found or fallback_pick()
 
     if action != "generate":
-        return question_bank.pick_question("technical", language="python")
+        return fallback_pick()
 
     try:
         title, topic, difficulty = spec["title"], spec["topic"], spec["difficulty"]
@@ -251,13 +260,13 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
         function_name = spec["function_name"]
         claimed = spec.get("claimed_outputs") or []
         if not calls or len(calls) < 3 or not function_name:
-            return question_bank.pick_question("technical", language="python")
+            return fallback_pick()
     except (KeyError, TypeError):
-        return question_bank.pick_question("technical", language="python")
+        return fallback_pick()
 
     actual_outputs = await _run_solution(solution, calls)
     if actual_outputs is None:
-        return question_bank.pick_question("technical", language="python")
+        return fallback_pick()
 
     # Cross-check the LLM's own claimed outputs against sandbox ground truth —
     # free (no extra LLM call), catches the LLM narrating a different result
@@ -266,7 +275,7 @@ async def select_or_generate_question(role: str, candidate_intro: str = "") -> d
     if claimed and len(claimed) == len(actual_outputs):
         mismatches = sum(1 for c, a in zip(claimed, actual_outputs) if _normalize(c) != _normalize(a))
         if mismatches > 1:
-            return question_bank.pick_question("technical", language="python")
+            return fallback_pick()
 
     tests = [{"call": c, "expected": o} for c, o in zip(calls, actual_outputs)]
 

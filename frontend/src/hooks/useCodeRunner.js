@@ -81,11 +81,22 @@ export function useCodeRunner() {
     await fetchBoilerplate(newLanguage, sessionId);
   };
 
-  // Called once the interviewer assigns a technical question — fetches
-  // boilerplate for whatever language is currently selected (usually the
-  // default, Python, which never goes through handleLanguageChange).
+  // Called whenever a technical question is (re)assigned — the first
+  // question at session start, or a candidate-requested switch to a
+  // different one mid-session (see guardrail.candidate_requests_new_problem
+  // on the backend). Every previously-cached boilerplate belongs to the OLD
+  // question once this fires, so the whole cache (not just the current
+  // language) gets invalidated, and the editor/test results reset to a clean
+  // slate before fetching the new question's real boilerplate — otherwise a
+  // question switch left the old question's code and test results on screen
+  // under the new question's title.
   const handleQuestionAssigned = (ctx, sessionId) => {
     setQuestionContext(ctx);
+    originalCodeRef.current = { [language]: STARTER_CODE[language] };
+    setCode(STARTER_CODE[language]);
+    setTestResults(null);
+    setRevealedCount(0);
+    setBoilerplateNote(null);
     fetchBoilerplate(language, sessionId);
   };
 

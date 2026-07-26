@@ -22,6 +22,7 @@ from models import (
     StartSessionResponse,
 )
 from services import (
+    guardrail,
     harness_generator,
     job_store,
     llm,
@@ -83,6 +84,8 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "job_description": req.job_description or None,
         "status": "active",
         "diagram_elements": [],
+        "asked_question_ids": set(),
+        "candidate_intro": "",
     }
 
     await run_in_threadpool(
@@ -118,11 +121,29 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
             session["track"] in ("technical", "system-design", "behavioral")
             and session.get("assigned_question") is None
         )
+        # Technical only: the candidate can explicitly ask for a different
+        # problem (e.g. "next question please", "can I get a new problem").
+        # The interviewer is otherwise hard-guardrailed against ever
+        # introducing a second problem on its own (see
+        # guardrail.sanitize_no_new_problem) — the code editor/boilerplate
+        # are tied to exactly one assigned question, so an uninvited switch
+        # would desync the transcript from what's actually gradable. This is
+        # the one deliberate, detectable exception: the candidate asking is
+        # a real signal the guardrail itself can't distinguish from the LLM
+        # going off script on its own.
+        wants_new_question = (
+            not is_first_reply
+            and session["track"] == "technical"
+            and session.get("assigned_question")
+            and guardrail.candidate_requests_new_problem(req.message)
+        )
+
         session["history"].append({"role": "candidate", "content": candidate_content})
         await run_in_threadpool(persist_message, req.session_id, "candidate", req.message, session["next_sequence_no"])
         session["next_sequence_no"] += 1
 
         if is_first_reply:
+            session["candidate_intro"] = req.message
             if session["track"] == "technical":
                 session["assigned_question"] = await question_generator.select_or_generate_question(
                     session["role"], candidate_intro=req.message,
@@ -136,11 +157,23 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
                     question_bank.pick_behavioral_question
                 )
             if session["assigned_question"]:
+                session.setdefault("asked_question_ids", set()).add(session["assigned_question"]["id"])
                 await run_in_threadpool(persist_assigned_question, req.session_id, session["assigned_question"]["id"])
+        elif wants_new_question:
+            exclude_ids = session.get("asked_question_ids") or set()
+            new_question = await question_generator.select_or_generate_question(
+                session["role"], candidate_intro=session.get("candidate_intro", ""), exclude_ids=exclude_ids,
+            )
+            if new_question:
+                session["assigned_question"] = new_question
+                session.setdefault("asked_question_ids", set()).add(new_question["id"])
+                await run_in_threadpool(persist_assigned_question, req.session_id, new_question["id"])
+            else:
+                wants_new_question = False  # bank exhausted — fall back to a normal follow-up turn
 
         question = await run_in_threadpool(
             llm.next_question, session["track"], session["role"], session["history"],
-            session.get("assigned_question"), session.get("job_description"), is_first_reply,
+            session.get("assigned_question"), session.get("job_description"), is_first_reply or wants_new_question,
         )
 
         session["history"].append({"role": "interviewer", "content": question})
@@ -148,7 +181,11 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         session["next_sequence_no"] += 1
         session["last_activity_at"] = now()
 
-    ctx = _question_context(session["assigned_question"]) if is_first_reply and session.get("assigned_question") else None
+    ctx = (
+        _question_context(session["assigned_question"])
+        if (is_first_reply or wants_new_question) and session.get("assigned_question")
+        else None
+    )
     return MessageResponse(question=question, question_context=ctx, done=is_turn_limit_reached(session))
 
 
