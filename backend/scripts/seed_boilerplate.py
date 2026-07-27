@@ -97,7 +97,12 @@ async def main(limit: int | None, languages: list[str]) -> None:
             if cached:
                 results["skipped"] += 1
                 continue
-            if lang not in (q.get("languages") or []) and lang not in ("java", "cpp"):
+            # java/cpp: on-demand full harness generation when not natively listed.
+            # node: on-demand signature-only generation (same function as the
+            # native case) — previously this was skipped for any question that
+            # didn't already list node, which is nearly all of them, so node
+            # was never actually attempted in practice.
+            if lang not in (q.get("languages") or []) and lang not in ("java", "cpp", "node"):
                 continue
             if lang in ("java", "cpp") and lang in (q.get("languages") or []):
                 continue  # native support already, no on-demand harness needed

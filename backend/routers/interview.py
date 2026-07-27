@@ -209,6 +209,16 @@ async def get_boilerplate(session_id: str, language: str, user: AuthenticatedUse
         signature = await harness_generator.get_or_generate_signature(assigned, bank_lang)
         return BoilerplateResponse(boilerplate=signature, supported=True)
 
+    if bank_lang == "node":
+        # JS doesn't need a full test-runner harness like Java/C++ — the same
+        # signature-only generator works regardless of whether the bank entry
+        # already lists node, unlike the harness path below. Previously this
+        # fell through to "unsupported" unconditionally for every question
+        # that didn't already list node natively (nearly all of them, since
+        # most imports are Python-only) — Node was never actually attempted.
+        signature = await harness_generator.get_or_generate_signature(assigned, bank_lang)
+        return BoilerplateResponse(boilerplate=signature, supported=bool(signature))
+
     if bank_lang not in ("java", "cpp"):
         return BoilerplateResponse(boilerplate=None, supported=False)
 
