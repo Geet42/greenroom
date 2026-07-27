@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Interview from "./pages/Interview";
 import Results from "./pages/Results";
 import AuthCallback from "./pages/AuthCallback";
+import Telemetry from "./pages/Telemetry";
 import RequireAuth from "./components/RequireAuth";
 
 export default function App() {
@@ -36,6 +37,14 @@ export default function App() {
         element={
           <RequireAuth>
             <Results />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/telemetry"
+        element={
+          <RequireAuth>
+            <Telemetry />
           </RequireAuth>
         }
       />

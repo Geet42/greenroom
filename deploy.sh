@@ -18,9 +18,9 @@ set -euo pipefail
 # ── Config ────────────────────────────────────────────────────────────────────
 GITHUB_USER="vishwajeetraut"
 RESOURCE_GROUP="greenroom-rg"
-API_URL="https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io"
-PISTON_INTERNAL="http://greenroom-piston.internal.orangeground-05e56063.swedencentral.azurecontainerapps.io/api/v2/execute"
-FRONTEND_ORIGIN="https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io"
+API_URL="https://greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io"
+PISTON_INTERNAL="http://greenroom-piston.internal.graybay-9c347e62.swedencentral.azurecontainerapps.io/api/v2/execute"
+FRONTEND_ORIGIN="https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io"
 
 # Image tags
 SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "latest")
