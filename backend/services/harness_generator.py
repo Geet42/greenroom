@@ -126,7 +126,7 @@ def _section(text: str, marker: str, next_markers: list[str]) -> str | None:
     return text[start:end].strip().strip("`").strip()
 
 
-def _generate(language: str, question: dict) -> dict | None:
+def _generate(language: str, question: dict, corrective_feedback: str | None = None) -> dict | None:
     lang_label = "Java" if language == "java" else "C++"
     b_marker, s_marker, h_marker = (_BOUNDARY.format(x) for x in ("BOILERPLATE", "SOLUTION", "HARNESS"))
     system = _SYSTEM.format(
@@ -140,6 +140,16 @@ def _generate(language: str, question: dict) -> dict | None:
         f"Problem: {question['title']}\n\n{question['prompt']}\n\n"
         f"function_name: {method_name}\n\nTest cases:\n{tests_preview}"
     )
+    # Corrective retry: feed the exact compiler/runtime error from the
+    # previous attempt back in, so the model fixes its specific mistake
+    # instead of independently re-guessing from scratch — this is what
+    # actually moves the needle on the ~40-60% first-try rate, not blind
+    # retries alone.
+    if corrective_feedback:
+        user += (
+            f"\n\nYour previous attempt failed with this exact error:\n{corrective_feedback}\n\n"
+            "Fix the specific bug that caused this error. Keep everything else the same."
+        )
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -214,38 +224,51 @@ def merge_sources(language: str, pieces: list[str]) -> str:
     return "\n\n".join(pieces)
 
 
-async def _compiles(language: str, source: str) -> bool:
+async def _compiles(language: str, source: str) -> tuple[bool, str]:
     """Runs `source` through the sandbox and checks it doesn't blow up. Used
     to make sure the BOILERPLATE itself — not just the reference solution —
     is valid {language} on its own, before a candidate has typed anything.
     The generated harness wraps every test call in its own try/catch (per the
     system prompt), so a genuine runtime exception from the stub's placeholder
     body is caught and reported as a per-test failure rather than a crash —
-    a nonzero exit with stderr here means the source didn't compile at all."""
+    a nonzero exit with stderr here means the source didn't compile at all.
+    Returns (ok, error_detail) — error_detail is fed back into the next
+    corrective generation attempt on failure."""
     result = await piston.run_code(_PISTON_LANG[language], _VERSION[language], source, stdin="")
     raw = result.get("run", {})
     if raw.get("stderr") and raw.get("code", 0) != 0:
-        return False
-    return True
+        return False, raw["stderr"][:1500]
+    return True, ""
 
 
-async def _verify(language: str, spec: dict, n_tests: int) -> bool:
+async def _verify(language: str, spec: dict, n_tests: int) -> tuple[bool, str]:
     boilerplate_source = merge_sources(language, [spec["boilerplate"], spec["harness"]])
-    if not await _compiles(language, boilerplate_source):
-        return False
+    ok, err = await _compiles(language, boilerplate_source)
+    if not ok:
+        return False, f"The BOILERPLATE (with its placeholder body) failed to compile:\n{err}"
 
     full_source = merge_sources(language, [spec["solution"], spec["harness"]])
     result = await piston.run_code(_PISTON_LANG[language], _VERSION[language], full_source, stdin="")
     raw = result.get("run", {})
     if raw.get("stderr") and raw.get("code", 0) != 0:
-        return False
+        return False, f"The SOLUTION + HARNESS failed to compile/run:\n{raw['stderr'][:1500]}"
     results = _parse_result_lines(raw.get("stdout", ""), n_tests)
     if results is None:
-        return False
-    return all(r.get("passed") for r in results)
+        return False, (
+            f"The harness printed {len((raw.get('stdout') or '').strip().splitlines())} lines of output, "
+            f"but exactly {n_tests} JSON result lines (one per test case) were expected. Its stdout was:\n"
+            f"{(raw.get('stdout') or '')[:1500]}"
+        )
+    if not all(r.get("passed") for r in results):
+        return False, (
+            "The reference SOLUTION (which is correct) failed some test cases according to the harness — "
+            "this means the harness's comparison logic or test-input translation is wrong, not the solution. "
+            f"Results: {json.dumps(results)[:1000]}"
+        )
+    return True, ""
 
 
-_GENERATION_ATTEMPTS = 3
+_GENERATION_ATTEMPTS = 4
 
 
 async def get_or_generate(question: dict, language: str) -> dict | None:
@@ -257,12 +280,14 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
     isn't, at least not yet).
 
     Retries generation up to _GENERATION_ATTEMPTS times on verification
-    failure: LLM-generated harness code has a real, measured failure rate
+    failure, feeding the exact compile/runtime error from each failed attempt
+    back into the next one (see _generate's corrective_feedback) so the model
+    fixes its specific mistake instead of independently re-guessing from
+    scratch. LLM-generated harness code has a real, measured failure rate
     (observed ~40-60% first-try pass rate for Java/C++ — genuine bugs like a
     variable declared inside one block and referenced outside it, which is
-    valid in some languages but not others). Since each attempt is an
-    independent generation, retrying meaningfully improves the odds of
-    landing a working harness instead of giving up on the first flub."""
+    valid in some languages but not others) — corrective retries close that
+    gap far faster than blind ones."""
     if language not in ("java", "cpp"):
         return None
 
@@ -271,13 +296,16 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         return cached
 
     import asyncio
+    feedback = None
     for attempt in range(1, _GENERATION_ATTEMPTS + 1):
-        spec = await asyncio.to_thread(_generate, language, question)
+        spec = await asyncio.to_thread(_generate, language, question, feedback)
         if not spec:
+            feedback = None  # generation itself failed (not a compile error) — nothing useful to correct
             continue
 
-        ok = await _verify(language, spec, len(question["tests"]))
+        ok, err = await _verify(language, spec, len(question["tests"]))
         if not ok:
+            feedback = err
             continue
 
         harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
