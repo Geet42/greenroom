@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from auth import AuthenticatedUser, get_current_user
 from models import AnalyticsEventRequest
 from services.persistence import persist_analytics_event
+from services.rate_limit import check_rate_limit
 from services.supabase_client import get_supabase
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -16,6 +17,7 @@ async def track_event(
     background_tasks: BackgroundTasks,
     user: AuthenticatedUser = Depends(get_current_user),
 ):
+    check_rate_limit(user.id, max_per_minute=60)
     background_tasks.add_task(
         persist_analytics_event, user.id, req.session_id, req.event, req.properties,
     )
@@ -24,6 +26,7 @@ async def track_event(
 
 @router.get("/stats")
 async def get_stats(user: AuthenticatedUser = Depends(get_current_user)):
+    check_rate_limit(user.id)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured")
