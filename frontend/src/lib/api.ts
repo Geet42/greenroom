@@ -86,6 +86,15 @@ export interface ResumeSessionResponse {
 
 export interface SaveDiagramPayload { session_id: string; elements: unknown[] }
 
+export interface SessionSummary {
+  id: string;
+  track: string;
+  role?: string | null;
+  overall_score?: number | null;
+  status: string;
+  created_at: string;
+}
+
 // ── API client ────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -118,6 +127,14 @@ export const api = {
 
   resumeSession: (sessionId: string) =>
     request<ResumeSessionResponse>(`/interview/${sessionId}/resume`),
+
+  listSessions: (opts: { limit?: number; offset?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit != null) params.set("limit", String(opts.limit));
+    if (opts.offset != null) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    return request<SessionSummary[]>(`/interview/sessions${qs ? `?${qs}` : ""}`);
+  },
 
   saveDiagram: (payload: SaveDiagramPayload) =>
     request<{ saved: boolean }>("/interview/diagram", {

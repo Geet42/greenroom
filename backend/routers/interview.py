@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
 from auth import AuthenticatedUser, get_current_user
@@ -15,6 +15,7 @@ from models import (
     RunTestsRequest,
     RunTestsResponse,
     SaveDiagramRequest,
+    SessionSummary,
     StartSessionRequest,
     StartSessionResponse,
 )
@@ -90,6 +91,26 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
     )
 
     return StartSessionResponse(session_id=session_id, track=req.track, question=greeting)
+
+
+@router.get("/sessions", response_model=list[SessionSummary])
+async def list_sessions(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    sb = get_supabase()
+    if not sb:
+        return []
+    resp = (
+        sb.table("sessions")
+        .select("id, track, role, overall_score, status, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return resp.data or []
 
 
 @router.post("/message", response_model=MessageResponse)
