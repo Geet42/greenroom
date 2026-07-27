@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from models import MessageRequest, RunCodeRequest, StartSessionRequest
+from models import MessageRequest, StartSessionRequest
 
 
 def test_start_session_valid():
@@ -18,8 +18,3 @@ def test_start_session_defaults():
 def test_message_request_requires_session_and_message():
     with pytest.raises(ValidationError):
         MessageRequest()  # missing required fields
-
-
-def test_run_code_request():
-    r = RunCodeRequest(language="python", version="3.10.0", source="print('hi')")
-    assert r.stdin == ""

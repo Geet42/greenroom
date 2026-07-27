@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
@@ -39,6 +39,16 @@ export default function Results() {
       mounted = false;
     };
   }, [sessionId]);
+
+  // Parsed once and reused by both the STAR Analysis card and the Gap
+  // analysis section below, instead of each re-parsing session.star_analysis
+  // independently from the same source.
+  const star = useMemo(() => {
+    if (!session?.star_analysis) return null;
+    return typeof session.star_analysis === "string"
+      ? JSON.parse(session.star_analysis)
+      : session.star_analysis;
+  }, [session?.star_analysis]);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -89,10 +99,7 @@ export default function Results() {
                 </div>
               )}
 
-              {session.star_analysis && (() => {
-                const star = typeof session.star_analysis === "string"
-                  ? JSON.parse(session.star_analysis)
-                  : session.star_analysis;
+              {star && (() => {
                 const elements = ["situation", "task", "action", "result"];
                 return (
                   <div className="mt-6 rounded-2xl border border-white/10 bg-panel p-6">
@@ -114,10 +121,7 @@ export default function Results() {
               })()}
 
               {/* Gap analysis — separate section, shown once the frog's callout is dismissed */}
-              {session.star_analysis && losgannDismissed && (() => {
-                const star = typeof session.star_analysis === "string"
-                  ? JSON.parse(session.star_analysis)
-                  : session.star_analysis;
+              {star && losgannDismissed && (() => {
                 if (!star.missing_elements?.length) return null;
                 return (
                   <div className="mt-6 rounded-2xl border border-white/10 bg-panel p-6 animate-in fade-in duration-500">

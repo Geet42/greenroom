@@ -43,9 +43,6 @@ export interface QuestionContext {
 
 export interface SendMessageResponse { question: string; done?: boolean; question_context?: QuestionContext }
 
-export interface RunCodePayload { language: string; version: string; source: string; stdin?: string }
-export interface CodeJobResult { run: { stdout: string; stderr: string; code: number } }
-
 export interface RunTestsPayload { session_id: string; language: string; version: string; source: string }
 export interface TestResult { id: number; label: string; input: string; expected: string; output?: string; error?: string; passed: boolean }
 export interface HiddenTestResult { id: number; passed: boolean }
@@ -103,22 +100,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-
-  runCode: async (payload: RunCodePayload): Promise<CodeJobResult | null> => {
-    const { job_id } = await request<{ job_id: string }>("/interview/code/run", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    const deadline = Date.now() + 90_000;
-    while (Date.now() < deadline) {
-      await new Promise<void>((r) => setTimeout(r, 1000));
-      const job = await request<{ status: string; result: CodeJobResult | null }>(
-        `/interview/code/job/${job_id}`
-      );
-      if (job.status === "done" || job.status === "error") return job.result;
-    }
-    throw new Error("Code execution timed out after 90 seconds.");
-  },
 
   runTests: (payload: RunTestsPayload) =>
     request<RunTestsResponse>("/interview/code/test", {

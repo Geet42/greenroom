@@ -67,6 +67,12 @@ export default function Dashboard() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deletingBulk, setDeletingBulk] = useState(false);
   const userIdRef = useRef(null);
+  // Delete/end/bulk-delete each had independent disabled-state, so a click on
+  // one row's action didn't block starting another action elsewhere while
+  // the first was still in flight — harmless in effect (fetchSessions()
+  // resync catches up either way) but avoidable jank. One flag, one source
+  // of truth for "something is mutating the session list right now."
+  const anyMutationInProgress = deletingId !== null || endingId !== null || deletingBulk;
 
   const fetchSessions = async () => {
     const userId = userIdRef.current;
@@ -266,7 +272,7 @@ export default function Dashboard() {
                       </button>
                       <button
                         onClick={handleDeleteSelected}
-                        disabled={selectedIds.size === 0 || deletingBulk}
+                        disabled={selectedIds.size === 0 || anyMutationInProgress}
                         className="rounded-full bg-coral/10 px-4 py-1.5 text-sm text-coral transition hover:bg-coral/20 disabled:opacity-40"
                       >
                         {deletingBulk ? "Deleting..." : `Delete selected${selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}`}
@@ -282,7 +288,7 @@ export default function Dashboard() {
                     <>
                       <button
                         onClick={handleDeleteAll}
-                        disabled={deletingBulk}
+                        disabled={anyMutationInProgress}
                         className="text-sm text-mute transition hover:text-coral disabled:opacity-40"
                       >
                         {deletingBulk ? "Deleting..." : "Delete all"}
@@ -363,7 +369,7 @@ export default function Dashboard() {
                           {s.status === "active" && (
                             <button
                               onClick={() => handleEndSession(s.id)}
-                              disabled={endingId === s.id}
+                              disabled={anyMutationInProgress}
                               className="text-sm text-mute transition hover:text-sage disabled:opacity-50"
                             >
                               {endingId === s.id ? "Ending..." : "End session"}
@@ -373,7 +379,7 @@ export default function Dashboard() {
                         <td className="px-4 py-3 text-right">
                           <button
                             onClick={() => handleDelete(s.id)}
-                            disabled={deletingId === s.id || deletingBulk}
+                            disabled={anyMutationInProgress}
                             className="text-sm text-mute transition hover:text-coral disabled:opacity-50"
                           >
                             {deletingId === s.id ? "Deleting..." : "Delete"}

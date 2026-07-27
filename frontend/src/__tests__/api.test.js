@@ -17,7 +17,6 @@ describe("api module surface", () => {
     const required = [
       "startSession",
       "sendMessage",
-      "runCode",
       "runTests",
       "endSession",
       "deleteSession",

@@ -1,20 +1,17 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from auth import AuthenticatedUser, get_current_user
 from models import (
     BoilerplateResponse,
-    CodeJobStatusResponse,
     EndSessionRequest,
     EndSessionResponse,
     MessageRequest,
     MessageResponse,
     QuestionContext,
     ResumeSessionResponse,
-    RunCodeJobResponse,
-    RunCodeRequest,
     RunTestsRequest,
     RunTestsResponse,
     SaveDiagramRequest,
@@ -24,7 +21,6 @@ from models import (
 from services import (
     guardrail,
     harness_generator,
-    job_store,
     llm,
     piston,
     question_bank,
@@ -187,37 +183,6 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         else None
     )
     return MessageResponse(question=question, question_context=ctx, done=is_turn_limit_reached(session))
-
-
-@router.post("/code/run", response_model=RunCodeJobResponse)
-async def run_code(
-    req: RunCodeRequest,
-    background_tasks: BackgroundTasks,
-    user: AuthenticatedUser = Depends(get_current_user),
-):
-    """Enqueues code execution and returns a job_id immediately.
-    The client polls GET /code/job/{job_id} for the result."""
-    check_rate_limit(user.id, max_per_minute=20)
-    jid = job_store.create_job()
-
-    async def _execute():
-        try:
-            result = await piston.run_code(req.language, req.version, req.source, req.stdin or "")
-            job_store.set_result(jid, result)
-        except Exception as exc:
-            job_store.set_error(jid, str(exc))
-
-    background_tasks.add_task(_execute)
-    return RunCodeJobResponse(job_id=jid)
-
-
-@router.get("/code/job/{job_id}", response_model=CodeJobStatusResponse)
-async def get_code_job(job_id: str, user: AuthenticatedUser = Depends(get_current_user)):
-    """Poll for the result of an async code execution job."""
-    job = job_store.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found or expired")
-    return CodeJobStatusResponse(status=job["status"], result=job.get("result"))
 
 
 @router.get("/{session_id}/boilerplate", response_model=BoilerplateResponse)

@@ -152,7 +152,10 @@ export default function CodeEditor({
   onRun,
   onReset,
 }) {
-  const lang = LANGUAGES.find((l) => l.id === language);
+  // Falls back to the first known language rather than throwing if `language`
+  // is ever a stale/unrecognized value (e.g. old localStorage/URL state from
+  // before a language was added or renamed).
+  const lang = LANGUAGES.find((l) => l.id === language) ?? LANGUAGES[0];
 
   return (
     <div className="flex flex-col h-full">

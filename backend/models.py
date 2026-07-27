@@ -95,22 +95,6 @@ class SaveDiagramRequest(BaseModel):
     elements: List[dict] = Field(default_factory=list, max_length=5000)
 
 
-class RunCodeRequest(BaseModel):
-    language: str = Field(min_length=1, max_length=50)
-    version: str = Field(min_length=1, max_length=50)
-    source: str = Field(min_length=1, max_length=100_000)
-    stdin: Optional[str] = Field(default="", max_length=20_000)
-
-
-class RunCodeJobResponse(BaseModel):
-    job_id: str
-
-
-class CodeJobStatusResponse(BaseModel):
-    status: Literal["pending", "done", "error"]
-    result: Optional[dict] = None
-
-
 class EndSessionRequest(BaseModel):
     session_id: str
 

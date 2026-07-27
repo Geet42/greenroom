@@ -134,13 +134,16 @@ export function useCodeRunner() {
         setTimeout(() => setRevealedCount(i), i * 300);
       }
     } catch {
+      // total: 0, not a guessed test count — this is a network failure, not
+      // a real result, so "0 / 7 passed" would misleadingly imply 7 tests
+      // actually ran and failed.
       setTestResults({
         status: "compile_error",
         compile_error: "Could not reach the code execution service.",
         visible_tests: [],
         hidden_tests: [],
         passed: 0,
-        total: 7,
+        total: 0,
       });
     } finally {
       if (slowHintTimer) clearTimeout(slowHintTimer);

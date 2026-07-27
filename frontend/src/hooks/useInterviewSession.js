@@ -229,7 +229,6 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
         setDiagramWarning(
           "Your diagram has fewer than 2 connected components. Add more structure, or dismiss this warning to send anyway."
         );
-        setSending(false);
         return;
       }
       setDiagramWarning(null);
