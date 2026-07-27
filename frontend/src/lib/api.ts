@@ -145,6 +145,9 @@ export const api = {
     return URL.createObjectURL(blob);
   },
 
+  getStats: () =>
+    request<Record<string, unknown>>("/analytics/stats"),
+
   // Fire-and-forget usage/click tracking — never throws, so callers can
   // invoke it inline without try/catch.
   trackEvent: (event: string, opts: { sessionId?: string; properties?: Record<string, unknown> } = {}) => {
