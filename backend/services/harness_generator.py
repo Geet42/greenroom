@@ -270,6 +270,13 @@ async def _verify(language: str, spec: dict, n_tests: int) -> tuple[bool, str]:
 
 _GENERATION_ATTEMPTS = 4
 
+# Cached negative result — distinguishable from "never attempted" (missing
+# key) and from a real success (a dict with boilerplate/harness, or a code
+# string for signatures). Without this, every backfill re-run and every live
+# candidate request re-attempts full generation from scratch for questions
+# already proven to fail, indefinitely.
+_UNSUPPORTED_MARKER = {"unsupported": True}
+
 
 async def get_or_generate(question: dict, language: str) -> dict | None:
     """Returns {"boilerplate": ..., "harness": ...} for this (question, language)
@@ -292,6 +299,12 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         return None
 
     cached = (question.get("harnesses") or {}).get(language)
+    if cached == _UNSUPPORTED_MARKER:
+        # All _GENERATION_ATTEMPTS failed on a previous run — don't burn
+        # tokens/sandbox calls re-proving the same negative result on every
+        # future request. See PERMANENTLY_UNSUPPORTED_QUESTIONS below for how
+        # to force a re-attempt (e.g. after improving the prompt).
+        return None
     if cached:
         return cached
 
@@ -312,6 +325,7 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         await asyncio.to_thread(_persist, question["id"], language, harness_data)
         return harness_data
 
+    await asyncio.to_thread(_persist, question["id"], language, _UNSUPPORTED_MARKER)
     return None
 
 
@@ -543,6 +557,8 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
         return None
 
     cached = (question.get("signatures") or {}).get(language)
+    if cached == _UNSUPPORTED_MARKER:
+        return None  # previously exhausted all attempts — see get_or_generate for why this matters
     if cached:
         return cached
 
@@ -569,6 +585,7 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
                 break
 
     if not code:
+        await asyncio.to_thread(_persist_signature, question["id"], language, _UNSUPPORTED_MARKER)
         return None
 
     await asyncio.to_thread(_persist_signature, question["id"], language, code)
