@@ -10,3 +10,7 @@ venv/
 
 .DS_Store
 frontend/.env.production
+
+# ephemeral scratch data used by one-off backend/scripts/*.py tools
+# (downloaded datasets, intermediate candidate lists) — never source of truth
+backend/scripts/_*.json
