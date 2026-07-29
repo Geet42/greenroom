@@ -1,7 +1,7 @@
 # Greenroom: Technical Design Document
 
 **Authors:** Vishwajeet, Geet, Anurag, Nithin, Mahati, Yuang
-**Version:** 4.0 · July 2026
+**Version:** 5.0 · July 2026
 **Status:** Active
 **Live app:** https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
 
@@ -68,11 +68,13 @@ A complete session moves through the following steps:
 
 3. **Interview loop.** On each turn the candidate speaks or types a reply; the frontend sends `POST /api/interview/message`. The backend checks the idle timeout (30 min, 410), assigns a question from the bank on the first reply (lazy assignment), calls the LLM, passes the response through the guardrail filter, and returns the interviewer's next question as text. The frontend speaks the reply via the TTS endpoint.
 
-4. **Technical track.** The candidate writes code in a Monaco editor. `POST /api/interview/code/run` enqueues execution and returns a `job_id` immediately; the frontend polls `GET /api/interview/code/job/{id}`. For Java/C++, a test harness is generated on first request via the LLM, verified in the sandbox, and cached. `POST /api/interview/code/test` runs the harness and returns per-case results.
+4. **Technical track.** The candidate writes code in a Monaco editor, pre-populated with real starter code for whichever language they pick. `POST /api/interview/code/test` runs the candidate's code against the assigned problem's test cases synchronously and returns per-case results (visible cases show input/expected/actual; hidden cases show pass/fail only). A candidate can ask the interviewer, in plain language, for a different problem mid-session — this is detected server-side (no UI button), and the editor/boilerplate reset to the new question.
 
 5. **System Design track.** Each message automatically serialises the Excalidraw canvas into a structured text description appended to the message body, so the AI interviewer can comment on the diagram in real time.
 
 6. **Session end.** `POST /api/interview/end` sends the full transcript to the LLM for evaluation. For system-design sessions, a second LLM call scores the candidate's diagram against the question's `expected_components`. The backend persists all scores and returns a structured scorecard.
+
+7. **Resume.** A candidate can leave mid-session and come back — `GET /api/interview/{id}/resume` restores the full message history, the assigned question, and (for system-design) the saved diagram, and counts as activity so resuming never triggers the idle timeout. The system-design canvas itself autosaves via `POST /api/interview/diagram` on a 2-second debounce.
 
 ---
 
@@ -124,17 +126,13 @@ All three run on every `/message` call after JWT validation, before the LLM call
 The public Piston API requires authentication. Piston is self-hosted as an internal Azure Container App with no public internet ingress; only the backend API can reach it. Wandbox is wired as a transparent fallback; responses are normalised to Piston's response shape so no other layer knows which tier handled the request.
 
 ```
-POST /api/interview/code/run
+POST /api/interview/code/test
   -> Tier 1: Self-hosted Piston  (internal Container App)
       if unavailable -> fall through
   -> Tier 2: Wandbox  (public API, no auth)
       if unavailable -> fall through
   -> Tier 3: "Temporarily unavailable" message to candidate
 ```
-
-### Async code execution job queue
-
-Code execution is decoupled from the HTTP request cycle. `POST /code/run` enqueues the job via FastAPI `BackgroundTasks` and returns `{job_id}` immediately. The frontend polls `GET /code/job/{id}` until `status` is `done` or `error`. This prevents long compilations from holding HTTP connections open and avoids Azure gateway timeouts.
 
 ### Dynamic test runner: two modes
 
@@ -146,11 +144,13 @@ The test runner handles both problem formats present in the question bank:
   ```
 - **stdin/stdout** (Codeforces-style): The candidate's raw source is the program. Each test case provides `stdin`; stdout is compared against expected output. All languages Piston supports are valid with no whitelist.
 
-### Lazy per-language boilerplate: Java/C++ harnesses and Python/JS signatures
+### Per-language boilerplate: dataset-first, LLM as fallback
 
-Java and C++ require a full compilable harness: imports, main, type-safe assertions. On first request the backend prompts the LLM to generate three sections (boilerplate, reference solution, test harness), runs the reference solution through the sandbox to verify all test cases pass, then caches the result under `questions.harnesses[language]` in Supabase. Subsequent requests for the same problem and language hit the cache immediately. If verification fails the harness is not cached, and the response is marked `error_type: "transient"` so the frontend suggests retrying.
+Java and C++ require a full compilable harness: imports, main, type-safe assertions. Generating this correctly with an LLM alone had a measured ~40-60% first-try success rate — enough failure that a large share of questions were permanently unusable in those two languages. The current approach sources real, official LeetCode starter code directly from a public problem dataset (`neenza/leetcode-problems`, matched to the bank by title) wherever a match exists, and builds the java/cpp test-driver deterministically (no LLM call) from the bank's own typed test data — parsing the dataset's own method signature, translating each test's arguments into typed literals, and generating the compare/print logic from a fixed template. Every generated boilerplate+driver is compiled in the sandbox before it's ever cached; nothing is served unverified.
 
-Python and JS don't need a harness — the test runner calls the candidate's function directly — but they still get a question-specific signature instead of a blank editor. For LeetCode-style `Solution().method` problems the parameter names are extracted deterministically from the bank's own test data (so a candidate can never see a keyword-argument name that doesn't match what the test runner will actually call); for plain functions and stateful/constructor-based problems the signature is LLM-generated and syntax-verified. Either way, the candidate's editor starts on the same boilerplate every time, and a reset button in `CodeEditor.jsx` restores it if they want to start over.
+Where no dataset match exists, or the deterministic driver can't handle the problem's shape (a custom type, a stateful/constructor-based problem), the backend falls back to the original approach: the LLM generates three sections (boilerplate, reference solution, test harness), the reference solution is run through the sandbox to verify all test cases pass, and the result is cached under `questions.harnesses[language]`. This path also feeds the exact compiler/runtime error from a failed attempt back into the next retry (`_GENERATION_ATTEMPTS = 4`) instead of blindly re-generating from scratch, and permanently caches a negative result (`_UNSUPPORTED_MARKER`) once every attempt is exhausted, so the same known-hard question is never silently re-attempted on every future request. A question whose java/cpp harness remains unsupported after all of this is either served in Python/JS only, or — for a subset that repeatedly failed — swapped for a same-difficulty, same-topic replacement problem from the same dataset, itself only accepted once its solution is sandbox-verified against the problem's own official example output.
+
+Python and JS don't need a harness — the test runner calls the candidate's function directly — but they still get a question-specific signature instead of a blank editor, sourced the same dataset-first way. For LeetCode-style `Solution().method` problems the parameter names are otherwise extracted deterministically from the bank's own test data (so a candidate can never see a keyword-argument name that doesn't match what the test runner will actually call); for plain functions and stateful/constructor-based problems the signature is LLM-generated and syntax-verified as a last resort. Either way, the candidate's editor starts on the same boilerplate every time, and a reset button in `CodeEditor.jsx` restores it if they want to start over.
 
 ### Four-layer guardrail against answer leaks
 
@@ -190,11 +190,11 @@ When a system-design session ends, `llm.evaluate_diagram()` scores the candidate
 ### Implemented
 
 - **Behavioral track:** multi-turn STAR-format Q&A with TTS voice; question assigned from the bank on first reply via `pick_behavioral_question()`
-- **Technical track:** Monaco editor, async code execution (Python, JS, Java, C++), dynamic test runner (call/expected + stdin/stdout), question-specific starter code for every language (LeetCode-style function/class signatures for Python/JS, lazy sandbox-verified harnesses for Java/C++) with a reset-to-original button, constraints panel, all languages supported for stdio problems
+- **Technical track:** Monaco editor with a tabbed Description/Examples/Constraints panel, synchronous code execution (Python, JS, Java, C++), dynamic test runner (call/expected + stdin/stdout), question-specific starter code for every language (real official starter code sourced from a public LeetCode dataset wherever matched, LLM-generated and sandbox-verified as fallback) with a reset-to-original button, candidate-requested question switching mid-session (detected server-side from plain conversational language, no button), all languages supported for stdio problems
 - **System Design track:** Excalidraw canvas with real-time serialisation; diagram scoring at session end against `expected_components`
-- **Session management:** concurrency cap (max 3, HTTP 429), idle timeout (30 min, HTTP 410), per-session candidate turn limit (15, then the interviewer wraps up), session history and delete
-- **Question bank:** 357 questions total:
-  - 295 technical: LeetCodeDataset (Kaggle / newfacade, MIT) + CodeContests (DeepMind, CC-BY-4.0) + 8 hand-written; all constraints filled
+- **Session management:** concurrency cap (max 3, HTTP 429), idle timeout (30 min, HTTP 410), per-session candidate turn limit (15, then the interviewer wraps up), session history and delete, full session resume (message history, assigned question, and system-design diagram restored)
+- **Question bank:** 357 questions total, all served from Supabase across all three tracks:
+  - 295 technical: LeetCodeDataset (Kaggle / newfacade, MIT) + CodeContests (DeepMind, CC-BY-4.0) + `neenza/leetcode-problems` (boilerplate source) + 8 hand-written; all constraints and examples filled
   - 42 behavioral: `ashishps1/awesome-behavioral-interviews`; each with `expected_elements` (STAR components)
   - 20 system-design: `donnemartin/system-design-primer`; each with `expected_components` for diagram scoring
 - **LLM pipeline:** Groq (Llama 3.3 70B) primary with Ollama Cloud fallback; LangChain LCEL chains; four-layer guardrail; self-critique reviewer pass on the evaluation chain
@@ -248,13 +248,12 @@ Planned additions: `httpx.AsyncClient` integration tests covering endpoint owner
 
 ### Observability
 
-Current: structured JSON logging via `structlog` per LLM call, capturing track, latency_ms, and provider (groq/fallback).
+Structured JSON logging via `structlog` per LLM call and per HTTP request (method, path, status, latency), capturing track and provider (groq/fallback). An in-app telemetry dashboard (`GET /api/analytics/stats`, `frontend/src/pages/Telemetry.jsx`) surfaces total/completed sessions, average score overall and per track, per-track completion rate, a 14-day session-activity chart, code-run language usage, and score distribution — built directly from the `sessions`/`analytics_events` tables, no external service required.
 
 Planned additions:
 
-- Per-request log: endpoint, latency, LLM provider, execution tier, error type; no tokens, message content, or source code logged
 - Sentry free tier for error tracking
-- Key metrics via Azure Log Analytics: session completion rate, LLM fallback rate, Piston vs Wandbox split, guardrail trigger rate, p95 latency on `/interview/message` and `/interview/code/test`
+- Azure Log Analytics: Piston vs Wandbox split, guardrail trigger rate, p95 latency on `/interview/message` and `/interview/code/test` (drafted in `infra/monitoring.bicep`, not yet deployed)
 
 **Privacy:** Candidates can delete all session data at any time via `DELETE /api/interview/{id}`. When Piston is unavailable, source code is sent to Wandbox; this is disclosed. No PII is logged.
 
@@ -335,7 +334,7 @@ VITE_API_URL=/api
 | Wandbox unavailable | "Temporarily unavailable" message; session continues without code execution |
 | Cross-replica session miss | Sticky sessions as interim; Redis as proper resolution |
 | Session state lost on backend restart | In-memory `SESSIONS` cache; Redis resolves permanently |
-| Java/C++ harness generation slow on first use | Loading hint shown after 5 s; `error_type: transient` returned so candidate can retry |
+| Some Java/C++ questions remain unsupported despite dataset-first + LLM-fallback generation | 28 (java) / 31 (cpp) of 218 non-stdio questions, mostly custom-type/graph problems outside the deterministic driver's scope — served in Python/JS only, or swapped for a verified equivalent problem where possible |
 | Web Speech API incompatible on Safari / Firefox | Documented requirement: Chrome or Edge + HTTPS |
 | Supabase free tier connection ceiling | Batching or upgraded plan |
 | Question bank licensing | Only public datasets with explicit licences; no scraping |
@@ -359,6 +358,7 @@ VITE_API_URL=/api
 | system-design-primer | https://github.com/donnemartin/system-design-primer |
 | LeetCodeDataset (Kaggle) | https://www.kaggle.com/datasets/newfacade/leetcode-dataset |
 | LeetCodeDataset (arXiv) | https://arxiv.org/abs/2504.14655 |
+| neenza/leetcode-problems (boilerplate source) | https://github.com/neenza/leetcode-problems |
 
 ---
 
@@ -370,21 +370,20 @@ backend/
   auth.py                    # JWT extraction via Supabase, returns AuthenticatedUser
   models.py                  # Pydantic request/response schemas with field constraints
   routers/
-    interview.py             # All interview endpoints: start, message, code/run, code/test, boilerplate, end, delete
+    interview.py             # All interview endpoints: start, message, code/test, boilerplate, resume, diagram autosave, end, delete
     tts.py                   # TTS endpoint, auth-gated and rate-limited like every other route
-    analytics.py             # Fire-and-forget usage/click event ingestion
+    analytics.py             # Fire-and-forget usage/click event ingestion + GET /stats for the telemetry dashboard
   services/
     llm.py                   # LangChain LCEL chains: opening_message, next_question, evaluate_session (+ self-critique pass), evaluate_diagram
     piston.py                # run_code(): Piston primary -> Wandbox fallback
     rate_limit.py            # Sliding-window per-user rate limiter: Postgres primary, in-memory fallback
     session_store.py         # In-memory SESSIONS dict with asyncio lock and idle eviction
     session_guard.py         # check_ownership, check_session_limit (max 3), check_idle_timeout (30 min), is_turn_limit_reached (15 candidate turns)
-    persistence.py           # Supabase writes: session start, messages, assigned_question, evaluation, analytics events
-    job_store.py             # Async code execution job queue with TTL eviction
+    persistence.py           # Supabase writes: session start, messages, assigned_question, evaluation, diagram, analytics events
     question_bank.py         # 357 questions: Supabase-first load with local JSON seed fallback
     question_generator.py    # LLM selects existing or generates new problem with dual-solution verification
     test_runner.py           # call/expected and stdin/stdout test modes, harness injection
-    harness_generator.py     # Lazy Java/C++ harness + Python/JS signature generation via LLM, sandbox/syntax-verified, cached to Supabase
+    harness_generator.py     # Java/C++ harness + Python/JS signature generation: dataset-first (deterministic driver, no LLM), LLM+sandbox-verify as fallback, negative-cached once exhausted
     guardrail.py             # 4-layer answer-leak prevention: prompt + regex + regeneration + fallback
     supabase_client.py       # Singleton Supabase client using service-role key
     logger.py                # structlog JSON logger
@@ -438,6 +437,7 @@ sessions (
   summary              TEXT,
   star_analysis        JSONB,   -- {situation, task, action, result, star_score, missing_elements[]}
   diagram_evaluation   JSONB,   -- {components_found[], components_missing[], proximity_score, proximity_label, feedback}
+  diagram_elements     JSONB,   -- raw Excalidraw scene, autosaved every 2s for resume
   assigned_question_id TEXT REFERENCES questions(id),
   created_at           TIMESTAMPTZ DEFAULT now(),
   ended_at             TIMESTAMPTZ,
@@ -519,11 +519,11 @@ analytics_events (
 | Method | Path | Rate limit | Description |
 |---|---|---|---|
 | `POST` | `/api/interview/start` | 30/min | Creates session, returns `{session_id, track, question}`. 429 if user has >= 3 active sessions. |
-| `POST` | `/api/interview/message` | 30/min | Sends candidate message. Assigns question on first reply. Returns `{question, question_context?, done?}`. `done: true` once the candidate turn limit is reached. 410 if session idle > 30 min. |
-| `POST` | `/api/interview/code/run` | 20/min | Enqueues code execution. Returns `{job_id}` immediately. |
-| `GET` | `/api/interview/code/job/{id}` | - | Polls job status: `{status: pending\|done\|error, result?}` |
-| `POST` | `/api/interview/code/test` | 20/min | Runs test harness. Returns `{status, visible_tests[], hidden_tests[], passed, total, error_type?}` |
+| `POST` | `/api/interview/message` | 30/min | Sends candidate message. Assigns question on first reply (or on a candidate-requested switch). Returns `{question, question_context?, done?}`. `done: true` once the candidate turn limit is reached. 410 if session idle > 30 min. |
+| `POST` | `/api/interview/code/test` | 20/min | Runs the candidate's code against the assigned problem's tests synchronously. Returns `{status, visible_tests[], hidden_tests[], passed, total, error_type?}` |
 | `GET` | `/api/interview/{id}/boilerplate?language=` | - | Returns `{boilerplate, supported}` for the session's assigned problem in the given language. |
+| `GET` | `/api/interview/{id}/resume` | - | Restores an in-progress session: message history, assigned question, and (system-design) saved diagram. Counts as activity. |
+| `POST` | `/api/interview/diagram` | - | Autosaves the system-design canvas (`{session_id, elements}`), 2s debounced from the frontend. |
 | `POST` | `/api/interview/end` | - | Evaluates session. For system-design: also calls `evaluate_diagram`. Returns `{overall_score, summary, star_analysis, evaluations[], diagram_evaluation?}` |
 | `DELETE` | `/api/interview/{id}` | - | Deletes session and all associated messages and evaluations. |
 
@@ -538,12 +538,13 @@ analytics_events (
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/analytics/event` | Fire-and-forget usage/click event. Persists in the background via `BackgroundTasks`; always returns 202 immediately regardless of whether the write succeeds. |
+| `GET` | `/api/analytics/stats` | Aggregated telemetry for the in-app dashboard: session counts, average scores overall/per-track, completion rates, 14-day activity, language usage, score distribution. |
 
 ### Health
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{status: "ok"}`, used by Azure health probes. |
+| `GET` | `/api/health` | Returns `{status: "ok"\|"degraded", checks: {supabase, piston, groq}}` — `degraded` if any dependency check fails; used by Azure health probes. |
 
 All endpoints except `/api/health` require `Authorization: Bearer <JWT>`.
 
@@ -642,4 +643,4 @@ The first 3 test cases per problem are shown to the candidate as visible (input,
 
 ---
 
-*Greenroom v4.0 · July 2026*
+*Greenroom v5.0 · July 2026*

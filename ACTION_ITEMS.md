@@ -88,15 +88,65 @@ What actually shipped, version by version, per the design doc's own
   interviewer context-accuracy, evaluation-score validity, and technical-track
   correctness
 
+**2026-07-27 to 2026-07-29 — question bank quality push + telemetry + a critical data gap found and fixed**
+
+- Fixed a corrective-retry gap: Java/C++ harness generation now feeds the
+  exact compiler/runtime error from a failed attempt back into the next
+  retry instead of blindly re-guessing (`_GENERATION_ATTEMPTS` 3 -> 4)
+- Fixed a caching bug where failed harness/signature generations were never
+  remembered — every backfill run and every live candidate request
+  re-attempted the full multi-try generation from scratch, indefinitely, for
+  questions already proven to fail (`_UNSUPPORTED_MARKER` sentinel added)
+- Fixed Node/JS boilerplate being structurally unreachable for ~200 of 218
+  questions — a restrictive check meant it was never actually attempted, not
+  failing
+- Merged upstream telemetry dashboard work (`Telemetry.jsx`,
+  `GET /analytics/stats`) — session completion rates, per-track average
+  scores, 14-day activity, language usage, score distribution
+- Fixed candidate-requested question switching on the technical track — a
+  candidate can now ask for a different problem in plain language mid-session
+  (previously stuck refused, since the guardrail couldn't tell "LLM went off
+  script" apart from "candidate explicitly asked")
+- Found and fixed 77 CodeContests-imported questions missing worked examples
+  entirely (masked by a bug in an earlier one-off verification script)
+- **Sourced real, official LeetCode starter code from a public dataset**
+  (`neenza/leetcode-problems`, ~2,900 problems) and matched it to 193/218
+  technical questions by title — eliminated LLM generation (and its ~40-60%
+  first-try success rate) for the vast majority of Java/C++/Python/JS
+  boilerplate; every match still compile-verified in the sandbox before caching
+- For the ~140 questions where LLM-generated Java/C++ harnesses had
+  permanently failed, **replaced them with verified equivalent problems**
+  from the same dataset — each replacement's reference solution is
+  sandbox-executed against the problem's own official example
+  input/output before its harness is even built, and the old question is
+  only deleted after the new one is fully built, compiled, and inserted.
+  Net effect: java confirmed-unsupported dropped from ~105 to 28 questions,
+  cpp from ~112 to 31, zero data loss, zero duplicate ids/titles
+- **Found and fixed a critical, previously-undiscovered production gap**:
+  Supabase's `questions` table only ever had the 295 technical rows —
+  `question_bank.py`'s Supabase-vs-local-JSON fallback only activates when
+  the whole table is *empty*, so the 42 behavioral + 20 system-design
+  questions sitting in the local seed file were **never actually served to
+  candidates**, since the table wasn't empty, just incomplete. This explains
+  why zero system-design sessions had ever been completed. Added the missing
+  `expected_elements`/`expected_components` migration (documented in
+  `DESIGN.md`'s schema for months but never actually applied) and seeded all
+  62 missing rows — all three tracks are now genuinely live for the first
+  time
+- Cleaned up scratch/temporary files that had leaked into the working tree
+  (a 20MB local copy of the boilerplate dataset, throwaway JSON working
+  files) and tightened `.gitignore` to prevent recurrence
+
 ## Open items
 
 Carried forward, not yet picked up:
 
-- **Harness-generation reliability for Java/C++** — first-try verification
-  pass rate for LLM-generated test harnesses is inconsistent (observed ~40-60%
-  on a small sample); some failures are genuine LLM driver-code bugs (e.g.
-  binding a temporary to a non-const C++ reference) rather than boilerplate
-  issues. Needs prompt iteration or a retry-with-feedback loop.
+- **Remaining Java/C++ gap** — 28 (java) / 31 (cpp) of 218 non-stdio
+  technical questions still have no working harness after both the
+  dataset-first and LLM-fallback passes — mostly custom-type (tree/graph)
+  or otherwise complex problems outside the deterministic driver's supported
+  type vocabulary. A further swap round is possible but each one needs a
+  hand-verified or LLM-verified reference solution; not attempted yet.
 - **Human-vs-bot evaluation-score correlation study** — no data yet on
   whether `overall_score` actually agrees with a human interviewer's rating
   (see `docs/EVALUATION_METRICS.md` §2). Needs 30+ real transcripts before it
@@ -110,3 +160,7 @@ Carried forward, not yet picked up:
   live resource before applying (see comments in the script).
 - **Seniority/role differentiation** — formally out of scope as of v4.0, but
   still the most-requested "make it feel less generic" ask if revisited.
+- **System-design and behavioral tracks are newly live in production** (see
+  above) — worth a manual smoke test end-to-end now that questions are
+  actually being served, since they've effectively never run against real
+  candidates before.
