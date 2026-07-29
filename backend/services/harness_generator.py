@@ -63,7 +63,11 @@ Complete {language} driver code, written so that the CANDIDATE'S code (which has
 class/method signature as the boilerplate) gets concatenated immediately BEFORE this code in the \
 same file. Declare each test's inputs as native {language} literals (translate the given Python \
 call/expected literals yourself — arrays, nested lists, booleans, null/None, strings), call the \
-candidate's method, and print ONE line of JSON per test case to stdout, in EXACTLY this schema:
+candidate's method, and print ONE line of JSON per test case to stdout, in EXACTLY this schema. \
+Check every numeric literal against the language's default integer range before choosing its \
+type — e.g. a value like 1000000000000 is far past Java/C++'s 32-bit int range (~2.1 billion) \
+and needs `long`/`long long` instead, matching whatever type the candidate's own signature uses \
+for that parameter:
   visible tests (the first 3): {{"id": N, "label": "Case N", "input": "<the call as a readable \
 string, e.g. twoSum([2,7,11,15], 9)>", "expected": "<expected result as a readable string>", \
 "passed": true|false}}
@@ -83,7 +87,24 @@ For Java: do not declare a `public class` — Wandbox compiles every submission 
 regardless of class name, so only non-public top-level classes/the harness's own top-level code \
 may exist. Use a single non-public `class Main` with `public static void main` as your harness \
 entry point, with the candidate's `Solution` class (which is also non-public) appended above it.
-For C++: include <bits/stdc++.h>, use namespace std, and write a `int main()` harness entry point."""
+For C++: include <bits/stdc++.h>, use namespace std, and write a `int main()` harness entry point.
+
+Do NOT redeclare `class Solution` (or any class/struct the boilerplate defines) anywhere in your \
+harness — it is already provided by the candidate's code, concatenated immediately before yours \
+in the same file. Only reference or instantiate it; declaring it again is a duplicate-definition \
+compile error.
+
+Never build one shared array/table mixing test cases whose arguments have different types (e.g. \
+an int next to an int[] next to a String in the same row) — {language}'s static typing can't \
+express a heterogeneous row, and this is a common source of type errors. Declare each test \
+case's input variables independently, inline, inside its own try/catch block, each with the \
+exact type its own arguments need — never a shared collection across tests.
+
+The "input"/"expected" strings you print need TWO layers of escaping at once: they must be valid \
+JSON string values, AND the {language} source code that writes them must itself be a valid string \
+literal. If a test's own data contains a `"` character (e.g. a string argument), escape it for \
+both layers — in Java that means an embedded `"` becomes `\\"` inside your string literal so the \
+compiler sees a literal backslash-quote, not an unterminated string."""
 
 _VERSION = {"java": "15.0.2", "cpp": "10.2.0"}
 _PISTON_LANG = {"java": "java", "cpp": "gcc"}
@@ -123,7 +144,15 @@ def _section(text: str, marker: str, next_markers: list[str]) -> str | None:
         idx = text.find(nm, start)
         if idx != -1:
             end = min(end, idx)
-    return text[start:end].strip().strip("`").strip()
+    section = text[start:end].strip()
+    # Strip a leading/trailing markdown code fence, including an optional
+    # language tag on the opening line (e.g. "```cpp\n...\n```") — a plain
+    # strip("`") only removes backtick characters and leaves the language
+    # tag behind as a bogus first line of code (e.g. a literal "cpp\n" that
+    # fails to compile). Same pattern as test_runner._strip_fences.
+    section = re.sub(r"^```[a-zA-Z0-9_+-]*\n?", "", section)
+    section = re.sub(r"\n?```$", "", section)
+    return section.strip()
 
 
 def _generate(language: str, question: dict, corrective_feedback: str | None = None) -> dict | None:
