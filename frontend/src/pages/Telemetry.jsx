@@ -43,21 +43,21 @@ function HBar({ label, value, max, color = "bg-amber", suffix = "" }) {
 function DailyChart({ data }) {
   const entries = Object.entries(data);
   const max = Math.max(...entries.map(([, v]) => v), 1);
+  const CHART_H = 80; // matches h-20
 
   return (
     <div className="flex items-end gap-1 h-20">
-      {entries.map(([day, count]) => {
-        const pct = Math.round((count / max) * 100);
+      {entries.map(([day, count], idx) => {
+        const barH = count > 0 ? Math.max(Math.round((count / max) * CHART_H), 4) : 2;
         const label = new Date(day + "T00:00:00").toLocaleDateString("en-IE", { month: "short", day: "numeric" });
         return (
           <div key={day} className="flex flex-col items-center flex-1 gap-1 group relative">
             <div
               className="w-full rounded-t bg-amber/70 group-hover:bg-amber transition-all duration-300"
-              style={{ height: `${Math.max(pct, 2)}%` }}
+              style={{ height: barH }}
               title={`${label}: ${count} session${count !== 1 ? "s" : ""}`}
             />
-            {/* show label every ~4 bars to avoid crowding */}
-            {entries.indexOf(entries.find(([d]) => d === day)) % 4 === 0 && (
+            {idx % 4 === 0 && (
               <span className="text-[9px] text-mute rotate-45 origin-left mt-1">{label}</span>
             )}
           </div>
