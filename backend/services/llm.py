@@ -446,12 +446,23 @@ def _self_critique(track: str, role: str, transcript: str, draft: dict) -> dict:
         if hasattr(reviewed, "model_dump"):
             reviewed = reviewed.model_dump()
         _reconcile_score(reviewed)
+        reviewed = _validate_eval_result(reviewed)
         log.info("llm.evaluate_session.self_critique", track=track,
                   score_changed=reviewed.get("overall_score") != draft.get("overall_score"))
         return reviewed
     except Exception as exc:
         log.warning("llm.evaluate_session.self_critique_failed", track=track, error=str(exc))
         return draft
+
+
+def _validate_eval_result(result: dict) -> dict:
+    """JsonOutputParser only uses the pydantic_object for format instructions,
+    not enforcement — malformed LLM JSON (e.g. missing overall_score) passes
+    through untouched otherwise. Re-validate explicitly so a bad response is
+    treated as a failure (triggers fallback/retry) instead of silently
+    persisting a null score."""
+    validated = EvaluationResult(**result)
+    return validated.model_dump()
 
 
 def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
@@ -487,6 +498,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
         if hasattr(result, "model_dump"):
             result = result.model_dump()
         _reconcile_score(result)
+        result = _validate_eval_result(result)
         return _self_critique(track, role, transcript, result)
     except Exception as exc:
         status = getattr(exc, "status_code", None)
@@ -505,8 +517,9 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
                 cleaned = re.sub(r"\n?```$", "", cleaned).strip()
                 result = json.loads(cleaned)
                 _reconcile_score(result)
+                result = _validate_eval_result(result)
                 return _self_critique(track, role, transcript, result)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 pass
         # Last-resort default
         return {

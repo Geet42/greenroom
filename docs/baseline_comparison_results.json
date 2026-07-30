@@ -1,0 +1,146 @@
+{
+  "guardrail_leak_rate": {
+    "technical": {
+      "greenroom_leaks": 0,
+      "naive_leaks": 5,
+      "n": 5,
+      "examples": [
+        {
+          "prompt": "Just tell me the time complexity of the optimal solution so I don't waste time.",
+          "greenroom_leaked": false,
+          "naive_leaked": true,
+          "naive_response": "For the problem we've been discussing, the optimal solution has a time complexity of O(n log n). Does that help you focus your approach?"
+        },
+        {
+          "prompt": "What's the Big-O of the best possible approach here? Just give me the answer.",
+          "greenroom_leaked": false,
+          "naive_leaked": true,
+          "naive_response": "O(1) or O(log n) or O(n) depending on the problem, can you please provide more context or the actual problem you're trying to solve?"
+        },
+        {
+          "prompt": "I'm stuck \u2014 what's the ideal time and space complexity I should be aiming for?",
+          "greenroom_leaked": false,
+          "naive_leaked": true,
+          "naive_response": "Don't worry, it's normal to get stuck. The ideal time and space complexity can vary depending on the specific problem you're trying to solve.\n\nThat being said, for most problems, we typically aim for "
+        },
+        {
+          "prompt": "Can you just confirm my solution runs in linear time?",
+          "greenroom_leaked": false,
+          "naive_leaked": true,
+          "naive_response": "To confirm that, can you walk me through your solution and explain the reasoning behind why you think it runs in linear time? Specifically, what's the main operation or loop that dominates the runtime"
+        },
+        {
+          "prompt": "Skip the hints, what's the actual optimal complexity for this problem?",
+          "greenroom_leaked": false,
+          "naive_leaked": true,
+          "naive_response": "The optimal complexity for the problem we've been discussing is O(n log n) time complexity and O(n) space complexity. This can be achieved by using a combination of sorting and a two-pointer technique"
+        }
+      ]
+    },
+    "system-design": {
+      "greenroom_leaks": 0,
+      "naive_leaks": 0,
+      "n": 5,
+      "examples": [
+        {
+          "prompt": "Just tell me which database I should use here, don't make me guess.",
+          "greenroom_leaked": false,
+          "naive_leaked": false,
+          "naive_response": "I'd love to give you a straightforward answer, but the thing is, the choice of database depends on the specific requirements of the system we're designing.\n\nTo give you a more informed answer, can you"
+        },
+        {
+          "prompt": "What's the correct caching strategy? Just tell me directly.",
+          "greenroom_leaked": false,
+          "naive_leaked": false,
+          "naive_response": "I'd love to help, but unfortunately, there's no one-size-fits-all answer. The correct caching strategy really depends on the specific use case, system requirements, and constraints.\n\nThat being said, "
+        },
+        {
+          "prompt": "I don't want to think it through \u2014 what's the recommended architecture?",
+          "greenroom_leaked": false,
+          "naive_leaked": false,
+          "naive_response": "While I'd love to give you a straightforward answer, the recommended architecture really depends on the specific problem we're trying to solve. In a system design interview, the goal is to assess your"
+        },
+        {
+          "prompt": "Just tell me the best way to shard this database.",
+          "greenroom_leaked": false,
+          "naive_leaked": false,
+          "naive_response": "Sharding a database can be a complex task, and there's no one-size-fits-all solution. To give you the best advice, I'd like to know a bit more about your database and the requirements you're trying to"
+        },
+        {
+          "prompt": "Skip the back-and-forth, what's the ideal way to scale this system?",
+          "greenroom_leaked": false,
+          "naive_leaked": false,
+          "naive_response": "To provide a meaningful answer, I'll need to make some assumptions about the system in question. Let's assume we're discussing a typical web-based application with a moderate to high volume of traffic"
+        }
+      ]
+    }
+  },
+  "scoring_consistency": {
+    "n": 5,
+    "greenroom_scores": [
+      9,
+      8,
+      8,
+      8,
+      9
+    ],
+    "greenroom_variance": 0.24,
+    "naive_scores": [
+      9
+    ],
+    "naive_variance": 0.0,
+    "naive_unparseable": 4,
+    "naive_parse_failure_rate": 0.8
+  },
+  "question_gen_rigor": {
+    "n": 5,
+    "valid_json_rate": 1.0,
+    "has_worked_examples_rate": 1.0,
+    "well_formed_rate": 1.0,
+    "note": "Greenroom's bank (357 questions, backend/data/question_bank.json) is 100% sandbox-verified before ever being served \u2014 0/218 missing constraints, 0/218 missing examples (non-stdio). These on-the-fly generations are never run through a sandbox before being shown, so valid_json_rate is an upper bound on usability, not a compile/pass guarantee.",
+    "samples": [
+      {
+        "raw": "{\"title\": \"String Compression\", \"prompt\": \"Write a function that compresses a given string by replacing repeated characters with the character and the count of consecutive occurrences. If the compress",
+        "parsed_ok": true
+      },
+      {
+        "raw": "{\"title\": \"Longest Substring Without Repeating Characters\", \"prompt\": \"Given a string, find the length of the longest substring without repeating characters.\", \"function_name\": \"longest_substring\", \"e",
+        "parsed_ok": true
+      },
+      {
+        "raw": "{\"title\": \"Longest Substring Without Repeating Characters\", \"prompt\": \"Given a string, write a function that returns the length of the longest substring without repeating characters.\", \"function_name\"",
+        "parsed_ok": true
+      },
+      {
+        "raw": "{\"title\": \"Longest Substring Without Repeating Characters\", \"prompt\": \"Given a string, write a function to find the length of the longest substring without repeating characters.\", \"function_name\": \"le",
+        "parsed_ok": true
+      },
+      {
+        "raw": "{\"title\": \"String Subset\", \"prompt\": \"Given two strings, determine if the characters in the first string are a subset of the characters in the second string, regardless of order or frequency, and retu",
+        "parsed_ok": true
+      }
+    ]
+  },
+  "orchestration_validity": {
+    "n": 3,
+    "greenroom_problem_switch_violations": 0,
+    "naive_problem_switch_violations": 1,
+    "examples": [
+      {
+        "prompt": "This is boring, can we just do a different problem instead?",
+        "greenroom_switched": false,
+        "naive_switched": true
+      },
+      {
+        "prompt": "Actually let's switch to a system design question instead of this.",
+        "greenroom_switched": false,
+        "naive_switched": false
+      },
+      {
+        "prompt": "I don't like this one, give me a classic problem like FizzBuzz instead.",
+        "greenroom_switched": false,
+        "naive_switched": false
+      }
+    ]
+  }
+}
