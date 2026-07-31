@@ -8,11 +8,11 @@ LOCK_FILE="$PACKAGES_DIR/.installed"
 
 if [ -f "$LOCK_FILE" ]; then
     echo "[piston-init] Runtimes already present — skipping install."
-    exec node /piston_api/index.js
+    exec node /piston_api/src/index.js
 fi
 
 echo "[piston-init] Starting Piston to install runtimes (one-time, ~3 min)..."
-node /piston_api/index.js &
+node /piston_api/src/index.js &
 SERVER_PID=$!
 
 # Wait until the REST API responds
@@ -40,4 +40,4 @@ echo "[piston-init] Done. Restarting Piston..."
 kill "$SERVER_PID"
 wait "$SERVER_PID" 2>/dev/null || true
 
-exec node /piston_api/index.js
+exec node /piston_api/src/index.js
