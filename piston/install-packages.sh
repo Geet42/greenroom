@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PACKAGES_DIR="/piston/packages"
-LOCK_FILE="$PACKAGES_DIR/.installed"
+LOCK_FILE="/piston/.packages_installed"
 
 if [ -f "$LOCK_FILE" ]; then
     echo "[piston-init] Runtimes already present — skipping install."
