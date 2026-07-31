@@ -23,15 +23,18 @@ ulimit -t 10
 # Prevents fork-bomb variants that write giant files to fill the container disk.
 ulimit -f 16384
 
-# Max number of open file descriptors: 64
-# Reduces surface for FD-exhaustion attacks.
-ulimit -n 64
+# Max number of open file descriptors: 512
+# Node.js needs ~100+ FDs just at startup (libuv, module loader, timers);
+# 64 caused EMFILE errors and crun clone failures under normal Piston load.
+ulimit -n 512
 
-# Max number of processes per UID: 64
-# Makes classic fork-bomb patterns hit a wall quickly.
-# Note: this caps processes for the UID running this script — Piston runs as
-# root inside the container (upstream image), so this limit applies to root.
-ulimit -u 64
+# Max number of processes per UID: 256
+# Piston (Node.js) + each code run spawns several child processes. 64 was
+# too tight — crun clone() returned EAGAIN before the submitted code could
+# even start, producing "OCI runtime error: crun: clone: Resource temporarily
+# unavailable". 256 still kills a fork-bomb quickly while giving Piston
+# enough room to operate.
+ulimit -u 256
 
 # Max resident set size: 256 MB (in KB)
 # Caps memory per process to prevent OOM-kills taking down the whole container.
