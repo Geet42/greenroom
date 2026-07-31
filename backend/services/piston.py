@@ -83,6 +83,63 @@ async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
         return None
 
 
+async def _local_subprocess(language: str, source: str, stdin: str) -> dict | None:
+    """Runs code directly in the backend container via subprocess.
+    Python is always available (it IS the server). Node works if nodejs is on PATH.
+    No sandbox — only callable behind authenticated routes."""
+    import asyncio
+    import os
+    import sys
+    import tempfile
+
+    if language == "python":
+        suffix, argv = ".py", [sys.executable]
+    elif language == "node":
+        suffix, argv = ".js", ["node"]
+    else:
+        return None
+
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as f:
+            f.write(source)
+            tmp = f.name
+
+        proc = await asyncio.create_subprocess_exec(
+            *argv, tmp,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=stdin.encode() if stdin else b""),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"run": {"stdout": "", "stderr": "Time limit exceeded (15s).", "code": 1}}
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    return {
+        "run": {
+            "stdout": stdout.decode(errors="replace"),
+            "stderr": stderr.decode(errors="replace"),
+            "code": proc.returncode,
+        }
+    }
+
+
 async def run_code(language: str, version: str, source: str, stdin: str = "") -> dict:
     import time
     start = time.monotonic()
@@ -118,5 +175,17 @@ async def run_code(language: str, version: str, source: str, stdin: str = "") ->
         log.info("piston.run", language=language, latency_ms=round((time.monotonic() - wb_start) * 1000), backend="wandbox")
         return result
 
-    log.error("piston.both_unavailable", language=language)
+    log.warning("piston.wandbox_unavailable", language=language)
+    sub_start = time.monotonic()
+
+    try:
+        result = await _local_subprocess(language, source, stdin)
+    except Exception:
+        result = None
+
+    if result:
+        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - sub_start) * 1000), backend="subprocess")
+        return result
+
+    log.error("piston.all_unavailable", language=language)
     return _UNAVAILABLE
