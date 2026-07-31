@@ -1,5 +1,7 @@
 FROM --platform=linux/amd64 ghcr.io/engineer-man/piston:latest
 
+RUN mkdir -p /piston/packages
+
 COPY install-packages.sh /usr/local/bin/install-packages.sh
 COPY piston-entrypoint.sh /usr/local/bin/piston-entrypoint.sh
 RUN chmod +x /usr/local/bin/install-packages.sh /usr/local/bin/piston-entrypoint.sh
