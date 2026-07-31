@@ -1,24 +1,25 @@
+import asyncio
 import os
 import re
+import sys
+import tempfile
 
 import httpx
 
 from services.logger import log
 from services.retry import with_retry
 
-# Self-hosted Piston (works locally with Docker + --privileged)
-PISTON_URL = os.environ.get("PISTON_URL", "http://localhost:2000/api/v2/execute")
+# emkc.org — free public Piston API, no key needed, identical request/response format
+_EMKC_URL = "https://emkc.org/api/v2/piston/execute"
 
-# Wandbox — free public compiler service, no auth, no rate-limit issues
+# Wandbox — free public compiler service, no auth
 _WANDBOX_URL = "https://wandbox.org/api/compile.json"
 _WANDBOX_COMPILER = {
     "python": "cpython-3.12.7",
     "node":   "nodejs-20.17.0",
     "java":   "openjdk-jdk-21+35",
-    "gcc":    "gcc-head",       # gcc-head compiles C++ by default; gcc-13.2.0 defaults to C (.c)
+    "gcc":    "gcc-head",
 }
-
-# Extra Wandbox payload fields per language
 _WANDBOX_EXTRA: dict[str, dict] = {
     "gcc": {"compiler-option-raw": "-std=c++17"},
 }
@@ -32,16 +33,15 @@ _UNAVAILABLE = {
 }
 
 
-async def _piston(language: str, version: str, source: str, stdin: str) -> dict | None:
+async def _emkc(language: str, version: str, source: str, stdin: str) -> dict | None:
+    """Public Piston API hosted by emkc.org — no key, free, same format as self-hosted."""
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
-                PISTON_URL,
+                _EMKC_URL,
                 json={"language": language, "version": version,
                       "files": [{"content": source}], "stdin": stdin},
             )
-            if resp.status_code == 401:
-                return None
             resp.raise_for_status()
             return resp.json()
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
@@ -49,12 +49,6 @@ async def _piston(language: str, version: str, source: str, stdin: str) -> dict 
 
 
 def _wandbox_source(language: str, source: str) -> str:
-    # Wandbox always compiles Java as "prog.java" regardless of what the
-    # candidate names their class. Java only requires the filename to match
-    # a top-level class if that class is declared `public` — so strip the
-    # `public` modifier from the top-level class holding main() (there can be
-    # at most one public top-level class per file in valid Java anyway, and
-    # only that one collides with the filename requirement).
     if language == "java":
         return re.sub(r"^public\s+class\b", "class", source, count=1, flags=re.MULTILINE)
     return source
@@ -84,14 +78,9 @@ async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
 
 
 async def _local_subprocess(language: str, source: str, stdin: str) -> dict | None:
-    """Runs code directly in the backend container via subprocess.
-    Python is always available (it IS the server). Node works if nodejs is on PATH.
-    No sandbox — only callable behind authenticated routes."""
-    import asyncio
-    import os
-    import sys
-    import tempfile
-
+    """Last-resort: run code directly in the backend container.
+    Python is always available (the backend IS Python 3.12).
+    Node works if nodejs is installed in the container image."""
     if language == "python":
         suffix, argv = ".py", [sys.executable]
     elif language == "node":
@@ -142,25 +131,27 @@ async def _local_subprocess(language: str, source: str, stdin: str) -> dict | No
 
 async def run_code(language: str, version: str, source: str, stdin: str = "") -> dict:
     import time
-    start = time.monotonic()
 
+    # 1. emkc.org — free external Piston API, no key, covers all languages
+    start = time.monotonic()
     try:
         result = await with_retry(
-            lambda: _piston(language, version, source, stdin),
+            lambda: _emkc(language, version, source, stdin),
             attempts=2,
             base_delay=0.5,
-            label="piston",
+            label="emkc",
         )
     except Exception:
         result = None
 
     if result:
-        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend="piston")
+        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend="emkc")
         return result
 
-    log.warning("piston.unavailable", language=language, latency_ms=round((time.monotonic() - start) * 1000))
-    wb_start = time.monotonic()
+    log.warning("piston.emkc_unavailable", language=language)
 
+    # 2. Wandbox — different external service, good Python/JS/Java/C++ coverage
+    wb_start = time.monotonic()
     try:
         result = await with_retry(
             lambda: _wandbox(language, source, stdin),
@@ -176,8 +167,9 @@ async def run_code(language: str, version: str, source: str, stdin: str = "") ->
         return result
 
     log.warning("piston.wandbox_unavailable", language=language)
-    sub_start = time.monotonic()
 
+    # 3. Local subprocess — Python + Node run directly in the backend container
+    sub_start = time.monotonic()
     try:
         result = await _local_subprocess(language, source, stdin)
     except Exception:
