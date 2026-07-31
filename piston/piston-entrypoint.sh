@@ -36,10 +36,12 @@ ulimit -n 512
 # enough room to operate.
 ulimit -u 256
 
-# Max resident set size: 256 MB (in KB)
-# Caps memory per process to prevent OOM-kills taking down the whole container.
-ulimit -m 262144
-ulimit -v 262144
+# Memory is intentionally NOT capped here with ulimit -m / -v.
+# V8 reserves a large virtual address range for its JIT code cache at startup
+# even when physical RSS stays low; a 256 MB virtual-memory ulimit causes
+# "Fatal process OOM in CodeRange setup" before Node.js is usable. The
+# container's 1 Gi cgroup memory limit is already enforced by the host kernel
+# and is the correct mechanism for bounding Piston's footprint.
 
 echo "[piston-entrypoint] Resource caps applied (best-effort, not a full sandbox)."
 exec /usr/local/bin/install-packages.sh
