@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from services import llm, question_bank
@@ -46,7 +47,8 @@ def _run_session(track: str, role: str, assigned_question: dict | None, candidat
 
     for i, candidate_msg in enumerate(candidate_turns):
         history.append({"role": "candidate", "content": candidate_msg})
-        persist_message(session_id, "candidate", candidate_msg, seq); seq += 1
+        persist_message(session_id, "candidate", candidate_msg, seq)
+        seq += 1
 
         is_new_assignment = (i == 0 and assigned_question is not None)
         reply = llm.next_question(
@@ -55,7 +57,8 @@ def _run_session(track: str, role: str, assigned_question: dict | None, candidat
             is_new_assignment=is_new_assignment,
         )
         history.append({"role": "interviewer", "content": reply})
-        persist_message(session_id, "interviewer", reply, seq); seq += 1
+        persist_message(session_id, "interviewer", reply, seq)
+        seq += 1
         print(f"  [{track}] turn {i+1} interviewer: {reply[:120]}")
 
     result = llm.evaluate_session(track, role, history)

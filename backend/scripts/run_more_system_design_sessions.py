@@ -17,10 +17,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from services import question_bank
 from run_good_faith_sessions import _run_session  # reuse the exact same pipeline call
+
+from services import question_bank
 
 
 def _design_turns(expected: list[str]) -> list[str]:
