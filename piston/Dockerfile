@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 ghcr.io/engineer-man/piston:latest
 
 RUN mkdir -p /piston/packages && \
-    echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list && \
+    printf 'deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n' > /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
