@@ -32,6 +32,12 @@ _UNAVAILABLE = {
     }
 }
 
+_OCI_MARKERS = ("OCI runtime", "crun: clone", "Resource temporarily unavailable")
+
+
+def _is_oci_error(text: str) -> bool:
+    return any(m in text for m in _OCI_MARKERS)
+
 
 async def _emkc(language: str, version: str, source: str, stdin: str) -> dict | None:
     """Public Piston API hosted by emkc.org — no key, free, same format as self-hosted."""
@@ -43,7 +49,12 @@ async def _emkc(language: str, version: str, source: str, stdin: str) -> dict | 
                       "files": [{"content": source}], "stdin": stdin},
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            if "run" not in data:
+                return None
+            if _is_oci_error(data["run"].get("stderr", "")):
+                return None
+            return data
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
         return None
 
@@ -66,6 +77,8 @@ async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
             resp.raise_for_status()
             data = resp.json()
             stderr = data.get("program_error") or data.get("compiler_error") or ""
+            if _is_oci_error(stderr):
+                return None
             return {
                 "run": {
                     "stdout": data.get("program_output") or "",
