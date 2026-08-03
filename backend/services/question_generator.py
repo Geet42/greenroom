@@ -42,8 +42,13 @@ match for THIS candidate, including their stated interests, stack, and experienc
 \"\"\"{candidate_intro}\"\"\"
 
 Below is the catalog of problems already available (id | topic | difficulty | title), in \
-randomized order. Prefer reusing one of these — they're already verified and free to serve. \
-Only generate a new problem if nothing in the catalog is a good fit for this candidate.
+randomized order. These are pre-verified to run correctly in Python, JavaScript, Java, AND C++ — \
+generated problems only reliably support Python/JavaScript (Java/C++ execution for a generated \
+problem is unverified and noticeably slower for the candidate). With a catalog this large \
+(hundreds of problems spanning most common topics/difficulties), it is extremely rare for none \
+of them to reasonably fit — default to "use_existing" and only choose "generate" if you have \
+genuinely searched the catalog and nothing is even a reasonable approximate match for this \
+candidate's stated background/topic. When in doubt, reuse.
 
 Catalog:
 {catalog}

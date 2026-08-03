@@ -27,6 +27,12 @@ Each element must have exactly two string fields:
   "expected" — the expected return value as a literal, e.g. "[0, 1]"
 
 Generate exactly 6 test cases: 3 typical inputs first, then 3 edge cases.
+Edge cases must stay WITHIN the problem's stated or clearly implied constraints (e.g. if the \
+problem describes an array as having "elements" or gives an example with at least one element, \
+do not test an empty array — that violates the implied minimum-length constraint even though \
+it's never spelled out as a number). Prefer boundary-but-valid inputs instead: smallest valid \
+size (usually 1 element, not 0), duplicate/repeated values, all-same values, and \
+largest-vs-smallest values in the same input.
 Output nothing except the JSON array."""
 
 
@@ -67,7 +73,11 @@ def _generate_cases(problem: str) -> list[dict] | None:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-            raw = _strip_fences(_fallback_chat(msgs, max_tokens=600, temperature=0.1))
+            # gpt-oss:20b (the fallback model) is a reasoning model that burns
+            # tokens on hidden "reasoning" content before writing the actual
+            # reply — 600 was consistently exhausted by reasoning alone,
+            # leaving empty content. 1200 was verified empirically sufficient.
+            raw = _strip_fences(_fallback_chat(msgs, max_tokens=1200, temperature=0.1))
         else:
             return None
 
@@ -83,6 +93,10 @@ def _generate_cases(problem: str) -> list[dict] | None:
 # ── Step 2: We write the harness; only the data comes from the LLM ───────────
 
 def _python_harness(source: str, cases: list[dict]) -> str:
+    cases = [
+        {**tc, "call": _jsliteral_to_py(tc["call"]), "expected": _jsliteral_to_py(tc["expected"])}
+        for tc in cases
+    ]
     cases_json = json.dumps(cases)
     return f'''{source}
 
@@ -140,7 +154,43 @@ for _i, _tc in enumerate(_hidden):
 '''
 
 
+_JS_LITERAL_TO_PY = [
+    (re.compile(r"\btrue\b"), "True"),
+    (re.compile(r"\bfalse\b"), "False"),
+    (re.compile(r"\bnull\b"), "None"),
+]
+
+
+def _jsliteral_to_py(text: str) -> str:
+    """LLM-generated case data is supposed to be Python-flavored (_CASES_SYSTEM),
+    but the Ollama fallback model sometimes emits JSON-native true/false/null
+    instead — which Python's eval() can't parse. Symmetric to _pyliteral_to_js."""
+    for pattern, repl in _JS_LITERAL_TO_PY:
+        text = pattern.sub(repl, text)
+    return text
+
+
+_PY_LITERAL_TO_JS = [
+    (re.compile(r"\bTrue\b"), "true"),
+    (re.compile(r"\bFalse\b"), "false"),
+    (re.compile(r"\bNone\b"), "null"),
+]
+
+
+def _pyliteral_to_js(text: str) -> str:
+    """LLM-generated 'call'/'expected' fields are always Python-flavored
+    (see _CASES_SYSTEM) even when the target language is JS — translate the
+    literals JS's eval() can't parse (True/False/None) before injection."""
+    for pattern, repl in _PY_LITERAL_TO_JS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def _node_harness(source: str, cases: list[dict]) -> str:
+    cases = [
+        {**tc, "call": _pyliteral_to_js(tc["call"]), "expected": _pyliteral_to_js(tc["expected"])}
+        for tc in cases
+    ]
     cases_json = json.dumps(cases)
     return f'''{source}
 
@@ -183,6 +233,21 @@ _hidden.forEach((_tc, _i) => {{
 '''
 
 
+# Cached by problem text so repeated "Run Tests" clicks and language switches
+# for the SAME ad-hoc problem reuse the same generated cases, instead of the
+# LLM (temperature 0.1, still non-deterministic) producing subtly different
+# test data each time — which would otherwise make Java/C++ (generated from
+# these same cases via services.adhoc_harness) drift out of sync with what
+# Python/JS are actually testing.
+_CASES_CACHE: dict[str, list[dict] | None] = {}
+
+
+def get_or_generate_cases(problem: str) -> list[dict] | None:
+    if problem not in _CASES_CACHE:
+        _CASES_CACHE[problem] = _generate_cases(problem)
+    return _CASES_CACHE[problem]
+
+
 def generate_harness(language: str, source: str, history: list[dict], assigned_question: dict | None = None) -> str | None:
     """
     Prefers canonical, pre-verified test cases from the curated question bank
@@ -196,7 +261,7 @@ def generate_harness(language: str, source: str, history: list[dict], assigned_q
         problem = _extract_problem(history)
         if not problem:
             return None
-        cases = _generate_cases(problem)
+        cases = get_or_generate_cases(problem)
         if not cases:
             return None
 

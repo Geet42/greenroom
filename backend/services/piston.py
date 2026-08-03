@@ -1,6 +1,5 @@
 import asyncio
 import os
-import re
 import sys
 import tempfile
 
@@ -9,20 +8,77 @@ import httpx
 from services.logger import log
 from services.retry import with_retry
 
-# emkc.org — free public Piston API, no key needed, identical request/response format
-_EMKC_URL = "https://emkc.org/api/v2/piston/execute"
+# --- Judge0 ---------------------------------------------------------------
+# Judge0 CE, called twice: first the public instance (no key, no signup,
+# best-effort/no SLA), then — if configured — a RapidAPI-hosted Judge0
+# instance as a more reliable second attempt before falling back locally.
+# Both speak the same request/response shape, so one function serves both.
+_JUDGE0_PUBLIC_URL = os.environ.get("JUDGE0_PUBLIC_URL", "https://ce.judge0.com")
+_JUDGE0_RAPIDAPI_URL = os.environ.get("JUDGE0_RAPIDAPI_URL", "https://judge0-ce.p.rapidapi.com")
+_JUDGE0_RAPIDAPI_KEY = os.environ.get("JUDGE0_RAPIDAPI_KEY")
+_JUDGE0_RAPIDAPI_HOST = os.environ.get("JUDGE0_RAPIDAPI_HOST", "judge0-ce.p.rapidapi.com")
 
-# Wandbox — free public compiler service, no auth
-_WANDBOX_URL = "https://wandbox.org/api/compile.json"
-_WANDBOX_COMPILER = {
-    "python": "cpython-3.12.7",
-    "node":   "nodejs-20.17.0",
-    "java":   "openjdk-jdk-21+35",
-    "gcc":    "gcc-head",
+_JUDGE0_LANGUAGE_ID = {
+    "python": 71,  # Python 3.8.1
+    "node":   63,  # JavaScript (Node.js 12.14.0)
+    "java":   62,  # Java (OpenJDK 13.0.1)
+    "gcc":    54,  # C++ (GCC 9.2.0)
 }
-_WANDBOX_EXTRA: dict[str, dict] = {
-    "gcc": {"compiler-option-raw": "-std=c++17"},
-}
+
+# Judge0 status id 13 = "Internal Error" — the judge itself failed to run the
+# submission (infra problem on their end), as opposed to ids like 6 (Compile
+# Error) or 11 (Runtime Error), which are legitimate results to show the
+# candidate. Only 13 (and a missing/unparseable status) counts as "unavailable".
+_JUDGE0_INFRA_ERROR_STATUS = 13
+
+_OCI_MARKERS = ("OCI runtime", "crun: clone", "Resource temporarily unavailable")
+
+
+def _is_oci_error(text: str) -> bool:
+    return any(m in text for m in _OCI_MARKERS)
+
+
+async def _judge0(base_url: str, headers: dict, language: str, source: str, stdin: str) -> dict | None:
+    lang_id = _JUDGE0_LANGUAGE_ID.get(language)
+    if lang_id is None:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            resp = await client.post(
+                f"{base_url}/submissions",
+                params={"base64_encoded": "false", "wait": "true"},
+                headers={"Content-Type": "application/json", **headers},
+                json={"source_code": source, "language_id": lang_id, "stdin": stdin},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            status_id = data.get("status", {}).get("id")
+            if status_id is None or status_id == _JUDGE0_INFRA_ERROR_STATUS:
+                return None
+            stderr = data.get("stderr") or data.get("compile_output") or ""
+            if _is_oci_error(stderr):
+                return None
+            return {
+                "run": {
+                    "stdout": data.get("stdout") or "",
+                    "stderr": stderr,
+                    "code": 0 if status_id == 3 else 1,
+                }
+            }
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
+        return None
+
+
+async def _judge0_public(language: str, source: str, stdin: str) -> dict | None:
+    return await _judge0(_JUDGE0_PUBLIC_URL, {}, language, source, stdin)
+
+
+async def _judge0_rapidapi(language: str, source: str, stdin: str) -> dict | None:
+    if not _JUDGE0_RAPIDAPI_KEY:
+        return None
+    headers = {"X-RapidAPI-Key": _JUDGE0_RAPIDAPI_KEY, "X-RapidAPI-Host": _JUDGE0_RAPIDAPI_HOST}
+    return await _judge0(_JUDGE0_RAPIDAPI_URL, headers, language, source, stdin)
+
 
 _UNAVAILABLE = {
     "run": {
@@ -32,83 +88,49 @@ _UNAVAILABLE = {
     }
 }
 
-_OCI_MARKERS = ("OCI runtime", "crun: clone", "Resource temporarily unavailable")
-
-
-def _is_oci_error(text: str) -> bool:
-    return any(m in text for m in _OCI_MARKERS)
-
-
-async def _emkc(language: str, version: str, source: str, stdin: str) -> dict | None:
-    """Public Piston API hosted by emkc.org — no key, free, same format as self-hosted."""
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                _EMKC_URL,
-                json={"language": language, "version": version,
-                      "files": [{"content": source}], "stdin": stdin},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if "run" not in data:
-                return None
-            if _is_oci_error(data["run"].get("stderr", "")):
-                return None
-            return data
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
-        return None
-
-
-def _wandbox_source(language: str, source: str) -> str:
-    if language == "java":
-        return re.sub(r"^public\s+class\b", "class", source, count=1, flags=re.MULTILINE)
-    return source
-
-
-async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
-    compiler = _WANDBOX_COMPILER.get(language)
-    if not compiler:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            payload = {"code": _wandbox_source(language, source), "compiler": compiler, "stdin": stdin}
-            payload.update(_WANDBOX_EXTRA.get(language, {}))
-            resp = await client.post(_WANDBOX_URL, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            stderr = data.get("program_error") or data.get("compiler_error") or ""
-            if _is_oci_error(stderr):
-                return None
-            return {
-                "run": {
-                    "stdout": data.get("program_output") or "",
-                    "stderr": stderr,
-                    "code": int(data.get("status", 0)),
-                }
-            }
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
-        return None
-
 
 async def _local_subprocess(language: str, source: str, stdin: str) -> dict | None:
     """Last-resort: run code directly in the backend container.
-    Python is always available (the backend IS Python 3.12).
-    Node works if nodejs is installed in the container image."""
-    if language == "python":
-        suffix, argv = ".py", [sys.executable]
-    elif language == "node":
-        suffix, argv = ".js", ["node"]
-    else:
-        return None
-
+    Python is always available (the backend IS Python 3.12). Node and C++
+    (gcc language id) work if node/g++ are installed in the container image."""
     tmp = None
+    compiled_bin = None
     try:
+        if language == "python":
+            suffix, run_argv, compile_argv = ".py", [sys.executable], None
+        elif language == "node":
+            suffix, run_argv, compile_argv = ".js", ["node"], None
+        elif language == "gcc":
+            suffix = ".cpp"
+            compiled_bin = tempfile.NamedTemporaryFile(suffix=".out", delete=False).name
+            os.unlink(compiled_bin)  # let the compiler create it
+            compile_argv = ["g++", "-O2", "-std=c++17", "-o", compiled_bin]
+            run_argv = [compiled_bin]
+        else:
+            return None
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as f:
             f.write(source)
             tmp = f.name
 
+        if compile_argv:
+            proc = await asyncio.create_subprocess_exec(
+                *compile_argv, tmp,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, compile_stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"run": {"stdout": "", "stderr": "Compilation timed out (15s).", "code": 1}}
+            if proc.returncode != 0:
+                return {"run": {"stdout": "", "stderr": compile_stderr.decode(errors="replace"), "code": proc.returncode}}
+
+        exec_args = run_argv if compile_argv else [*run_argv, tmp]
         proc = await asyncio.create_subprocess_exec(
-            *argv, tmp,
+            *exec_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -127,11 +149,12 @@ async def _local_subprocess(language: str, source: str, stdin: str) -> dict | No
     except Exception:
         return None
     finally:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        for path in (tmp, compiled_bin):
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
     return {
         "run": {
@@ -145,43 +168,24 @@ async def _local_subprocess(language: str, source: str, stdin: str) -> dict | No
 async def run_code(language: str, version: str, source: str, stdin: str = "") -> dict:
     import time
 
-    # 1. emkc.org — free external Piston API, no key, covers all languages
-    start = time.monotonic()
-    try:
-        result = await with_retry(
-            lambda: _emkc(language, version, source, stdin),
-            attempts=2,
-            base_delay=0.5,
-            label="emkc",
-        )
-    except Exception:
-        result = None
+    backends = [
+        ("judge0_public", lambda: _judge0_public(language, source, stdin), 2, 0.5),
+        ("judge0_rapidapi", lambda: _judge0_rapidapi(language, source, stdin), 2, 1.0),
+    ]
 
-    if result:
-        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend="emkc")
-        return result
+    for name, call, attempts, base_delay in backends:
+        start = time.monotonic()
+        try:
+            result = await with_retry(call, attempts=attempts, base_delay=base_delay, label=name)
+        except Exception:
+            result = None
 
-    log.warning("piston.emkc_unavailable", language=language)
+        if result:
+            log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend=name)
+            return result
 
-    # 2. Wandbox — different external service, good Python/JS/Java/C++ coverage
-    wb_start = time.monotonic()
-    try:
-        result = await with_retry(
-            lambda: _wandbox(language, source, stdin),
-            attempts=2,
-            base_delay=1.0,
-            label="wandbox",
-        )
-    except Exception:
-        result = None
+        log.warning(f"piston.{name}_unavailable", language=language)
 
-    if result:
-        log.info("piston.run", language=language, latency_ms=round((time.monotonic() - wb_start) * 1000), backend="wandbox")
-        return result
-
-    log.warning("piston.wandbox_unavailable", language=language)
-
-    # 3. Local subprocess — Python + Node run directly in the backend container
     sub_start = time.monotonic()
     try:
         result = await _local_subprocess(language, source, stdin)

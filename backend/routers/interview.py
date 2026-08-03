@@ -19,6 +19,7 @@ from models import (
     StartSessionResponse,
 )
 from services import (
+    adhoc_harness,
     guardrail,
     harness_generator,
     llm,
@@ -194,6 +195,13 @@ async def get_boilerplate(session_id: str, language: str, user: AuthenticatedUse
 
     assigned = session.get("assigned_question")
     if not assigned:
+        bank_lang = "cpp" if language == "gcc" else language
+        if bank_lang in ("java", "cpp"):
+            problem = test_runner._extract_problem(session["history"])
+            cases = test_runner.get_or_generate_cases(problem) if problem else None
+            if cases:
+                signature = await adhoc_harness.get_or_generate_signature(bank_lang, problem, cases)
+                return BoilerplateResponse(boilerplate=signature, supported=bool(signature))
         return BoilerplateResponse(boilerplate=None, supported=True)
 
     is_stdio = bool(assigned.get("tests") and "stdin" in assigned["tests"][0])
@@ -285,7 +293,14 @@ async def run_tests(req: RunTestsRequest, user: AuthenticatedUser = Depends(get_
 
     if is_stdio:
         return RunTestsResponse(**await _run_stdio(req, assigned))
-    if assigned and bank_lang in ("java", "cpp") and bank_lang not in (assigned.get("languages") or []):
+    if assigned and bank_lang in ("java", "cpp"):
+        # Always prefer the curated bank's own harness path for java/cpp when a
+        # bank question is assigned — get_or_generate checks its Supabase cache
+        # first, so an already-verified harness (whether the question lists
+        # java/cpp natively in "languages" or only has it via generated
+        # "harnesses") is served instantly instead of falling through to the
+        # ad-hoc (re-generate-from-scratch) path below, which doesn't know
+        # about this question's own pre-verified test data at all.
         return RunTestsResponse(**await _run_generated_harness(req, assigned, bank_lang))
     return RunTestsResponse(**await _run_call_expected(req, session, assigned))
 
@@ -313,18 +328,49 @@ async def _run_generated_harness(req: RunTestsRequest, assigned: dict, bank_lang
 
 
 async def _run_call_expected(req: RunTestsRequest, session: dict, assigned: dict | None) -> dict:
+    bank_lang = "cpp" if req.language == "gcc" else req.language
+    if bank_lang in ("java", "cpp"):
+        return await _run_adhoc_compiled(req, session, bank_lang)
+
     harness = test_runner.generate_harness(
         req.language, req.source, session["history"],
         assigned_question=session.get("assigned_question"),
     )
     if harness is None:
-        msg = (
-            f"Test cases are not yet supported for {req.language}. Switch to Python or JavaScript to use the test runner."
-            if req.language not in ("python", "node")
-            else "No coding problem has been assigned yet — wait for the interviewer to give you a problem first."
+        return _error_response(
+            "No coding problem has been assigned yet — wait for the interviewer to give you a problem first.",
+            "permanent",
         )
-        return _error_response(msg, "permanent")
     result = await piston.run_code(req.language, req.version, harness)
+    raw = result.get("run", {})
+    return test_runner.parse_results(raw.get("stdout", ""), raw.get("stderr", ""))
+
+
+async def _run_adhoc_compiled(req: RunTestsRequest, session: dict, bank_lang: str) -> dict:
+    """Java/C++ test running for problems the interviewer invented ad hoc
+    (not from the curated bank) — mirrors _run_generated_harness, but keyed
+    by problem text via services.adhoc_harness instead of a bank question id."""
+    problem = test_runner._extract_problem(session["history"])
+    if not problem:
+        return _error_response(
+            "No coding problem has been assigned yet — wait for the interviewer to give you a problem first.",
+            "permanent",
+        )
+    cases = test_runner.get_or_generate_cases(problem)
+    if not cases:
+        return _error_response(
+            "Couldn't generate test cases for this problem. Try again in a moment.", "transient",
+        )
+    harness_data = await adhoc_harness.get_or_generate(bank_lang, problem, cases)
+    if not harness_data:
+        return _error_response(
+            f"Couldn't auto-generate a verified {req.language} harness for this problem. "
+            "Switch to Python or JavaScript, or try again — harness generation uses the LLM "
+            "and occasionally fails on first attempt.",
+            "transient",
+        )
+    full_source = harness_generator.merge_sources(bank_lang, [req.source, harness_data["harness"]])
+    result = await piston.run_code(req.language, req.version, full_source, stdin="")
     raw = result.get("run", {})
     return test_runner.parse_results(raw.get("stdout", ""), raw.get("stderr", ""))
 

@@ -60,15 +60,17 @@ async def health():
     sb = get_supabase()
     checks["supabase"] = "ok" if sb else "unconfigured"
 
-    # Piston reachability (fire-and-forget, 3 s timeout)
-    piston_url = os.environ.get("PISTON_URL", "http://localhost:2000/api/v2/execute")
-    piston_base = piston_url.replace("/api/v2/execute", "")
+    # Judge0 reachability (fire-and-forget, 3 s timeout). Checks the public
+    # instance only — RapidAPI's key-gated instance isn't cheap to probe
+    # without burning a quota'd request, and the code path already falls
+    # back to local subprocess execution if both are down.
+    judge0_url = os.environ.get("JUDGE0_PUBLIC_URL", "https://ce.judge0.com")
     try:
         async with httpx.AsyncClient(timeout=3) as client:
-            r = await client.get(f"{piston_base}/api/v2/runtimes")
-            checks["piston"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
+            r = await client.get(f"{judge0_url}/languages")
+            checks["judge0"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
     except Exception:
-        checks["piston"] = "unreachable"
+        checks["judge0"] = "unreachable"
 
     # Groq key present (we can't call it cheaply; just assert it's configured)
     checks["groq"] = "configured" if os.environ.get("GROQ_API_KEY") else "unconfigured"
