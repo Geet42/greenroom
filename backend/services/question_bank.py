@@ -48,6 +48,52 @@ _SEED_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "question_ban
 _lock = threading.Lock()
 _cache: list[dict] | None = None
 
+_JUNIOR_KEYWORDS = ("junior", "jr.", "jr ", "entry", "intern", "associate", "new grad", "graduate", "trainee")
+_SENIOR_KEYWORDS = ("senior", "sr.", "sr ", "staff", "principal", "lead", "architect", "distinguished")
+
+# Difficulty mix per seniority tier — junior interviews skew easy with fewer
+# mediums and no hards; senior interviews skew toward medium/hard and rarely
+# open with easy. "mid" (the default, unlabeled role) stays close to the
+# original uniform-ish behavior.
+_DIFFICULTY_WEIGHTS = {
+    "junior": {"easy": 0.65, "medium": 0.35, "hard": 0.0},
+    "mid":    {"easy": 0.35, "medium": 0.45, "hard": 0.20},
+    "senior": {"easy": 0.10, "medium": 0.45, "hard": 0.45},
+}
+
+
+def infer_seniority(role: str | None) -> str:
+    """Buckets a free-text role string (e.g. "Junior Backend Engineer",
+    "Staff Software Engineer") into "junior" | "mid" | "senior" so question
+    selection can skew its difficulty mix accordingly. Defaults to "mid" for
+    anything that doesn't mention a seniority keyword."""
+    role_lower = (role or "").lower()
+    if any(kw in role_lower for kw in _JUNIOR_KEYWORDS):
+        return "junior"
+    if any(kw in role_lower for kw in _SENIOR_KEYWORDS):
+        return "senior"
+    return "mid"
+
+
+def _weighted_choice(candidates: list[dict], seniority: str) -> dict | None:
+    """Picks one candidate, weighting by difficulty per _DIFFICULTY_WEIGHTS
+    instead of a flat random.choice — falls back to uniform choice if the
+    weighted pool is empty (e.g. every candidate's difficulty has weight 0)."""
+    if not candidates:
+        return None
+    weights = _DIFFICULTY_WEIGHTS[seniority]
+    scored = [(c, weights.get(c.get("difficulty") or "medium", 0)) for c in candidates]
+    total = sum(w for _, w in scored)
+    if total <= 0:
+        return random.choice(candidates)
+    r = random.uniform(0, total)
+    upto = 0.0
+    for c, w in scored:
+        upto += w
+        if upto >= r:
+            return c
+    return scored[-1][0]
+
 
 def _load_seed() -> list[dict]:
     with open(_SEED_PATH, "r", encoding="utf-8") as f:
@@ -87,6 +133,7 @@ def pick_question(
     topic: str | None = None,
     difficulty: str | list[str] | None = None,
     exclude_ids: set[str] | None = None,
+    role: str | None = None,
 ) -> dict | None:
     """Random question matching track/language(/topic/difficulty). None if nothing
     matches — callers should fall back to ad hoc LLM-generated problems in that case.
@@ -94,15 +141,22 @@ def pick_question(
     difficulty defaults to ["easy", "medium"] — "hard" problems are excluded unless
     explicitly requested, since they're disproportionately represented in the
     imported LeetCodeDataset batch (71/210) and aren't a great default mock-interview
-    experience. Pass difficulty="hard" (or a list including it) once seniority-level
-    selection is wired up.
+    experience, EXCEPT for senior roles (see `role` below), where hard is included.
+
+    role: free-text role string (e.g. "Junior Backend Engineer"). When
+    `difficulty` is not explicitly pinned by the caller, this is used to skew
+    the pick's difficulty mix — more easy for junior roles, more medium/hard
+    for senior roles — via infer_seniority()/_weighted_choice() instead of a
+    flat random.choice.
 
     exclude_ids: question ids to skip — e.g. ones already assigned earlier in
     the same session (see "Next question" in routers/interview.py), so asking
     for another problem doesn't risk re-serving the one just finished.
     """
+    explicit_difficulty = difficulty is not None
+    seniority = infer_seniority(role)
     if difficulty is None:
-        difficulty = ["easy", "medium"]
+        difficulty = ["easy", "medium", "hard"] if seniority == "senior" else ["easy", "medium"]
     elif isinstance(difficulty, str):
         difficulty = [difficulty]
 
@@ -113,16 +167,26 @@ def pick_question(
         and (q.get("difficulty") or "medium") in difficulty
         and q["id"] not in (exclude_ids or set())
     ]
-    return random.choice(candidates) if candidates else None
+    if not candidates:
+        return None
+    if explicit_difficulty:
+        return random.choice(candidates)
+    return _weighted_choice(candidates, seniority)
 
 
 def get_question(question_id: str) -> dict | None:
     return next((q for q in _all_questions() if q.get("id") == question_id), None)
 
 
-def pick_behavioral_question(topic: str | None = None, difficulty: str | list[str] | None = None) -> dict | None:
-    """Random behavioral question, optionally filtered by topic and difficulty."""
-    if difficulty is not None and isinstance(difficulty, str):
+def pick_behavioral_question(
+    topic: str | None = None, difficulty: str | list[str] | None = None, role: str | None = None,
+) -> dict | None:
+    """Random behavioral question, optionally filtered by topic and difficulty.
+
+    role: when `difficulty` isn't explicitly pinned, skews the pick's
+    difficulty mix by seniority (see pick_question)."""
+    explicit_difficulty = difficulty is not None
+    if isinstance(difficulty, str):
         difficulty = [difficulty]
     candidates = [
         q for q in _all_questions()
@@ -130,18 +194,30 @@ def pick_behavioral_question(topic: str | None = None, difficulty: str | list[st
         and (topic is None or q.get("topic") == topic)
         and (difficulty is None or (q.get("difficulty") or "medium") in difficulty)
     ]
-    return random.choice(candidates) if candidates else None
+    if not candidates:
+        return None
+    if explicit_difficulty:
+        return random.choice(candidates)
+    return _weighted_choice(candidates, infer_seniority(role))
 
 
-def pick_system_design_question(difficulty: str | list[str] | None = None) -> dict | None:
+def pick_system_design_question(difficulty: str | list[str] | None = None, role: str | None = None) -> dict | None:
     """Random system-design question. Includes all difficulties by default (unlike
-    pick_question which excludes hard). None if the bank has no SD questions yet."""
-    if difficulty is not None and isinstance(difficulty, str):
+    pick_question which excludes hard). None if the bank has no SD questions yet.
+
+    role: when `difficulty` isn't explicitly pinned, skews the pick's
+    difficulty mix by seniority (see pick_question)."""
+    explicit_difficulty = difficulty is not None
+    if isinstance(difficulty, str):
         difficulty = [difficulty]
     candidates = [
         q for q in _all_questions()
         if q.get("track") == "system-design"
         and (difficulty is None or (q.get("difficulty") or "medium") in difficulty)
     ]
-    return random.choice(candidates) if candidates else None
+    if not candidates:
+        return None
+    if explicit_difficulty:
+        return random.choice(candidates)
+    return _weighted_choice(candidates, infer_seniority(role))
 
