@@ -124,7 +124,7 @@ export default function Telemetry() {
       <Navbar />
       <main className="mx-auto max-w-6xl px-6 py-10">
         <div className="mb-8">
-          <h1 className="font-display text-2xl text-cream">Telemetry</h1>
+          <h1 className="font-display text-2xl text-cream">Dashboard</h1>
         </div>
 
         {loading && (
