@@ -111,7 +111,8 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
 
         candidate_content = req.message
         if req.code:
-            candidate_content += f"\n\n[Candidate's current code]\n{req.code}"
+            lang_label = f" ({req.language})" if req.language else ""
+            candidate_content += f"\n\n[Candidate's submitted code{lang_label}]\n```\n{req.code}\n```"
 
         is_first_reply = (
             session["track"] in ("technical", "system-design", "behavioral")
@@ -135,7 +136,10 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         )
 
         session["history"].append({"role": "candidate", "content": candidate_content})
-        await run_in_threadpool(persist_message, req.session_id, "candidate", req.message, session["next_sequence_no"])
+        # Persist the code-inclusive content (not just req.message) — the
+        # transcript otherwise silently drops whatever the candidate had in
+        # the editor when they sent this turn.
+        await run_in_threadpool(persist_message, req.session_id, "candidate", candidate_content, session["next_sequence_no"])
         session["next_sequence_no"] += 1
 
         if is_first_reply:
