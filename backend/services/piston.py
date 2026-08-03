@@ -92,23 +92,42 @@ async def _wandbox(language: str, source: str, stdin: str) -> dict | None:
 
 async def _local_subprocess(language: str, source: str, stdin: str) -> dict | None:
     """Last-resort: run code directly in the backend container.
-    Python is always available (the backend IS Python 3.12).
-    Node works if nodejs is installed in the container image."""
-    if language == "python":
-        suffix, argv = ".py", [sys.executable]
-    elif language == "node":
-        suffix, argv = ".js", ["node"]
-    else:
-        return None
-
-    tmp = None
+    Python 3.12 and gcc/g++ are always present. nodejs is installed too."""
+    src_file = bin_file = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as f:
-            f.write(source)
-            tmp = f.name
+        if language == "python":
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+                f.write(source)
+                src_file = f.name
+            run_argv = [sys.executable, src_file]
+
+        elif language == "node":
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False) as f:
+                f.write(source)
+                src_file = f.name
+            run_argv = ["node", src_file]
+
+        elif language == "gcc":
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".cpp", delete=False) as f:
+                f.write(source)
+                src_file = f.name
+            bin_fd, bin_file = tempfile.mkstemp()
+            os.close(bin_fd)
+            compile_proc = await asyncio.create_subprocess_exec(
+                "g++", "-std=c++17", "-O2", "-o", bin_file, src_file,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, compile_err = await asyncio.wait_for(compile_proc.communicate(), timeout=15)
+            if compile_proc.returncode != 0:
+                return {"run": {"stdout": "", "stderr": compile_err.decode(errors="replace"), "code": compile_proc.returncode}}
+            run_argv = [bin_file]
+
+        else:
+            return None
 
         proc = await asyncio.create_subprocess_exec(
-            *argv, tmp,
+            *run_argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -127,11 +146,12 @@ async def _local_subprocess(language: str, source: str, stdin: str) -> dict | No
     except Exception:
         return None
     finally:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        for path in (src_file, bin_file):
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
     return {
         "run": {

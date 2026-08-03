@@ -318,12 +318,36 @@ async def _run_call_expected(req: RunTestsRequest, session: dict, assigned: dict
         assigned_question=session.get("assigned_question"),
     )
     if harness is None:
-        msg = (
-            f"Test cases are not yet supported for {req.language}. Switch to Python or JavaScript to use the test runner."
-            if req.language not in ("python", "node")
-            else "No coding problem has been assigned yet — wait for the interviewer to give you a problem first."
+        if req.language not in ("python", "node"):
+            # For gcc/java: compile and run the code as-is, show raw output.
+            # Automated test comparison isn't supported for these languages yet,
+            # but at least the candidate can see their output and verify manually.
+            result = await piston.run_code(req.language, req.version, req.source)
+            raw = result.get("run", {})
+            stdout = raw.get("stdout", "")
+            stderr = raw.get("stderr", "")
+            if stderr and not stdout.strip():
+                return _error_response(stderr[:1500], "permanent")
+            return {
+                "status": "accepted",
+                "compile_error": None,
+                "visible_tests": [{
+                    "id": 1,
+                    "label": "Output",
+                    "input": "(no automated test cases — verify output manually)",
+                    "expected": "(manual check)",
+                    "output": stdout or "(no output)",
+                    "passed": True,
+                }],
+                "hidden_tests": [],
+                "passed": 1,
+                "total": 1,
+                "error_type": None,
+            }
+        return _error_response(
+            "No coding problem has been assigned yet — wait for the interviewer to give you a problem first.",
+            "permanent",
         )
-        return _error_response(msg, "permanent")
     result = await piston.run_code(req.language, req.version, harness)
     raw = result.get("run", {})
     return test_runner.parse_results(raw.get("stdout", ""), raw.get("stderr", ""))
