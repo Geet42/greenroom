@@ -77,14 +77,13 @@ export default function Dashboard() {
   const fetchSessions = async () => {
     const userId = userIdRef.current;
     if (!userId) return;
-    const { data, error } = await supabase
-      .from("sessions")
-      .select("id, track, role, overall_score, created_at, status")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (!error) setSessions(data ?? []);
-    return { data, error };
+    try {
+      const data = await api.listSessions({ limit: 100 });
+      setSessions(data ?? []);
+    } catch {
+      // Leave the existing list in place — the mutation that triggered this
+      // refresh (delete/end) already surfaces its own error to the user.
+    }
   };
 
   useEffect(() => {

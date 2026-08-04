@@ -180,8 +180,13 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.code !== "Space" || e.repeat) return;
-      const tag = document.activeElement?.tagName;
+      const active = document.activeElement;
+      const tag = active?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Monaco's actual contenteditable/textarea target doesn't always match
+      // activeElement's tag (it can sit on the outer .monaco-editor container,
+      // e.g. right after mount) — check by ancestry instead of exact tag.
+      if (active?.closest?.(".monaco-editor")) return;
       e.preventDefault();
       if (!isListening && isSupported) {
         spaceRecordingRef.current = true;

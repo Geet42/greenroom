@@ -33,8 +33,28 @@ import uuid
 
 from services import piston, question_bank
 
+_DIFFICULTY_GUIDANCE = {
+    "junior": (
+        '"easy" | "medium"',
+        "This is a JUNIOR-level role: strongly bias toward \"easy\" problems, with only an "
+        "occasional \"medium\" — never \"hard\".",
+    ),
+    "mid": (
+        '"easy" | "medium" | "hard"',
+        "This role has no clear seniority signal: prefer \"easy\" or \"medium\"; reserve "
+        "\"hard\" for a candidate whose intro clearly signals strong, senior-level experience.",
+    ),
+    "senior": (
+        '"medium" | "hard"',
+        "This is a SENIOR-level role: strongly bias toward \"medium\" and \"hard\" problems — "
+        "only fall back to \"easy\" if the candidate's intro suggests they'd struggle otherwise.",
+    ),
+}
+
 _DECIDE_OR_GENERATE_SYSTEM = """\
 You are choosing the coding problem for a technical interview for a {role} role.
+
+{difficulty_note}
 
 Candidate's introduction (use this to pick something that actually fits their background — \
 don't default to the same generic crowd-pleaser every time; choose what's genuinely the best \
@@ -63,7 +83,7 @@ To generate a new one (only if truly nothing fits):
   "action": "generate",
   "title": "<short title>",
   "topic": "<one or two word topic>",
-  "difficulty": "easy" | "medium",
+  "difficulty": {difficulty_options},
   "prompt": "<full problem statement, LeetCode-style: candidate implements a single function \
 that takes arguments and returns a value — do NOT ask them to read from stdin or write a full \
 program>",
@@ -211,7 +231,9 @@ async def select_or_generate_question(
     "Next question" in routers/interview.py) — skipped everywhere so
     requesting another problem can't just re-serve the one just finished."""
     exclude_ids = exclude_ids or set()
-    fallback_pick = lambda: question_bank.pick_question("technical", language="python", exclude_ids=exclude_ids)  # noqa: E731
+    fallback_pick = lambda: question_bank.pick_question(  # noqa: E731
+        "technical", language="python", exclude_ids=exclude_ids, role=role,
+    )
 
     all_questions = await asyncio.to_thread(question_bank._all_questions)
     technical = [q for q in all_questions if q.get("track") == "technical" and q["id"] not in exclude_ids]
@@ -228,8 +250,10 @@ async def select_or_generate_question(
 
     catalog_pool = [q for q in technical if q["id"] not in _EXCLUDED_FROM_AUTO_PICK]
     catalog = _build_catalog(catalog_pool)
+    difficulty_options, difficulty_note = _DIFFICULTY_GUIDANCE[question_bank.infer_seniority(role)]
     system = _DECIDE_OR_GENERATE_SYSTEM.format(
         role=role, candidate_intro=candidate_intro or "(not provided)", catalog=catalog,
+        difficulty_options=difficulty_options, difficulty_note=difficulty_note,
     )
     user_msg = "Choose now."
 

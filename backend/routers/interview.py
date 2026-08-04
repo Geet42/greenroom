@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
 from auth import AuthenticatedUser, get_current_user
@@ -15,6 +15,7 @@ from models import (
     RunTestsRequest,
     RunTestsResponse,
     SaveDiagramRequest,
+    SessionSummary,
     StartSessionRequest,
     StartSessionResponse,
 )
@@ -93,6 +94,26 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
     return StartSessionResponse(session_id=session_id, track=req.track, question=greeting)
 
 
+@router.get("/sessions", response_model=list[SessionSummary])
+async def list_sessions(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    sb = get_supabase()
+    if not sb:
+        return []
+    resp = (
+        sb.table("sessions")
+        .select("id, track, role, overall_score, status, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return resp.data or []
+
+
 @router.post("/message", response_model=MessageResponse)
 async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(get_current_user)):
     check_rate_limit(user.id)
@@ -112,7 +133,8 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
 
         candidate_content = req.message
         if req.code:
-            candidate_content += f"\n\n[Candidate's current code]\n{req.code}"
+            lang_label = f" ({req.language})" if req.language else ""
+            candidate_content += f"\n\n[Candidate's submitted code{lang_label}]\n```\n{req.code}\n```"
 
         is_first_reply = (
             session["track"] in ("technical", "system-design", "behavioral")
@@ -136,7 +158,10 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         )
 
         session["history"].append({"role": "candidate", "content": candidate_content})
-        await run_in_threadpool(persist_message, req.session_id, "candidate", req.message, session["next_sequence_no"])
+        # Persist the code-inclusive content (not just req.message) — the
+        # transcript otherwise silently drops whatever the candidate had in
+        # the editor when they sent this turn.
+        await run_in_threadpool(persist_message, req.session_id, "candidate", candidate_content, session["next_sequence_no"])
         session["next_sequence_no"] += 1
 
         if is_first_reply:
@@ -147,11 +172,11 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
                 )
             elif session["track"] == "system-design":
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_system_design_question
+                    question_bank.pick_system_design_question, None, session["role"]
                 )
             else:
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_behavioral_question
+                    question_bank.pick_behavioral_question, None, None, session["role"]
                 )
             if session["assigned_question"]:
                 session.setdefault("asked_question_ids", set()).add(session["assigned_question"]["id"])
@@ -410,6 +435,7 @@ async def delete_session(session_id: str, user: AuthenticatedUser = Depends(get_
 
     await _delete("evaluations", "session_id")
     await _delete("messages", "session_id")
+    await _delete("analytics_events", "session_id")
     await _delete("sessions", "id")
     return {"deleted": session_id}
 
@@ -439,7 +465,9 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
         diagram_eval = None
         assigned = session.get("assigned_question")
         if session["track"] == "system-design" and assigned and assigned.get("expected_components"):
-            diagram_eval = await run_in_threadpool(llm.evaluate_diagram, session["history"], assigned)
+            diagram_eval = await run_in_threadpool(
+                llm.evaluate_diagram, session["history"], assigned, session.get("diagram_elements"),
+            )
             result["diagram_evaluation"] = diagram_eval
 
         await run_in_threadpool(persist_evaluation, req.session_id, result)

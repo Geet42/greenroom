@@ -42,13 +42,13 @@ export default function Navbar() {
                 to="/dashboard"
                 className="rounded-full px-4 py-2 text-sm text-cream transition hover:bg-panel"
               >
-                Dashboard
+                Your Interviews
               </Link>
               <Link
                 to="/telemetry"
                 className="rounded-full px-4 py-2 text-sm text-mute transition hover:bg-panel hover:text-cream"
               >
-                Telemetry
+                Dashboard
               </Link>
               <button
                 onClick={handleSignOut}

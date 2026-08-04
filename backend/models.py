@@ -1,6 +1,7 @@
+import json
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class StartSessionRequest(BaseModel):
@@ -46,6 +47,15 @@ class StartSessionResponse(BaseModel):
     session_id: str
     track: str
     question: str
+
+
+class SessionSummary(BaseModel):
+    id: str
+    track: str
+    role: Optional[str] = None
+    overall_score: Optional[int] = None
+    status: str
+    created_at: str
 
 
 class MessageRequest(BaseModel):
@@ -134,3 +144,10 @@ class AnalyticsEventRequest(BaseModel):
     event: str = Field(min_length=1, max_length=100)
     session_id: Optional[str] = None
     properties: Optional[dict] = None
+
+    @field_validator("properties")
+    @classmethod
+    def _bound_properties_size(cls, v: Optional[dict]) -> Optional[dict]:
+        if v is not None and len(json.dumps(v)) > 2000:
+            raise ValueError("properties payload too large (max 2000 bytes serialized)")
+        return v
