@@ -12,6 +12,7 @@ import pytest
 from services.harness_generator import (
     _build_class_signature,
     _extract_kwarg_names,
+    _section,
     _verify_signature,
 )
 
@@ -134,3 +135,29 @@ def test_build_node_class_signature():
     code = _build_class_signature("node", "Solution", "kthCharacter", ["k"])
     assert _verify_signature("node", code, "kthCharacter")
     assert "class Solution {" in code
+
+
+# ── _section ─────────────────────────────────────────────────────────────────
+
+def test_section_plain_no_fence():
+    text = "###---A---###\nclass Solution {}\n###---B---###\nnext part"
+    assert _section(text, "###---A---###", ["###---B---###"]) == "class Solution {}"
+
+
+def test_section_strips_markdown_fence_with_language_tag():
+    # Regression: a plain strip("`") leaves the language tag ("cpp") behind
+    # as a bogus first line of code, which fails to compile.
+    text = "###---A---###\n```cpp\nclass Solution {};\n```\n###---B---###\nnext"
+    result = _section(text, "###---A---###", ["###---B---###"])
+    assert result == "class Solution {};"
+    assert "cpp" not in result
+
+
+def test_section_strips_fence_without_language_tag():
+    text = "###---A---###\n```\nclass Solution {}\n```\n###---B---###\nnext"
+    assert _section(text, "###---A---###", ["###---B---###"]) == "class Solution {}"
+
+
+def test_section_missing_marker_returns_none():
+    text = "no markers here at all"
+    assert _section(text, "###---A---###", ["###---B---###"]) is None
