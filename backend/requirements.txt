@@ -10,4 +10,5 @@ pydantic>=2.9.0
 # LangChain agent stack
 langchain>=0.3.0
 langchain-groq>=0.2.0
+langchain-openai>=0.2.0
 langchain-core>=0.3.0
