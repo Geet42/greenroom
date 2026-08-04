@@ -2,6 +2,8 @@
 
 Every unique version of the project's design document, extracted from git history (oldest first). Files are named `<date>_<commit>_<subject-slug>.md`.
 
+**Exception:** the 2026-06 pre-POC entry was never committed to this repo as `DESIGN.md` — it's the original planning doc (`Greenroom_Dev_Design_Document.md`, supplied externally, not generated from `git log`) that predates the 2026-06-17 POC doc below. Its filename uses `pre-poc` in place of a commit hash for that reason. Its proposed architecture (ASP.NET Core orchestrator, Go code judge, Azure AI Foundry/Cosmos DB/AKS) was never built as described — the actual v1.0 POC below used a different, simpler stack (FastAPI, Supabase, Groq) from day one. Kept for historical context on the original vision, not as a record of what shipped.
+
 ## Images
 
 `images/` holds every unique version of the diagrams these docs embed
@@ -12,6 +14,7 @@ older snapshot shows the diagrams as they looked at the time, not today's:
 
 | File | Versions |
 |---|---|
+| `2026-06_proposed-architecture-interview-session-flow.png` | 1 — the earliest proposed architecture diagram of any kind for this project, from the pre-POC pitch/sprint deck (`MockBot_Final.pptx`, Sprint 2 / Week 2, "Architecture: Interview Session Flow" — the first of two architecture slides in that deck). Never embedded inline in a `DESIGN.md`/dev-design-doc Markdown file; kept here as the original proposed-architecture artifact, referenced from the pre-POC entry below. |
 | `architecture.svg` | 1 — added 2026-06-24 ([2c01196](https://github.com/VishwajeetRaut/greenroom/commit/2c01196)), used only by the two v2.0-era snapshots before the doc moved to `docs/diagrams/*.png` |
 | `architecture.png` | 2 — 2026-06-30 ([33152fa](https://github.com/VishwajeetRaut/greenroom/commit/33152fa)), 2026-07-08 ([9b380dd](https://github.com/VishwajeetRaut/greenroom/commit/9b380dd), current) |
 | `user-flow.png` | 2 — same two commits |
@@ -23,6 +26,7 @@ neither version embedded any images.
 
 | Date | Commit | Message |
 |---|---|---|
+| 2026-06 | pre-poc (external) | [Greenroom Dev Design Document v1.0 — original pitch/roadmap doc, predates the in-repo DESIGN.md](2026-06_pre-poc_greenroom-dev-design-document-v1-0.md) |
 | 2026-06-17 | [e878d99](https://github.com/VishwajeetRaut/greenroom/commit/e878d99) | [feat: LangChain LCEL agent, bug fixes, POC design doc](2026-06-17_e878d99_feat-langchain-lcel-agent-bug-fixes-poc-design-doc.md) |
 | 2026-06-24 | [2c01196](https://github.com/VishwajeetRaut/greenroom/commit/2c01196) | [docs: update design doc v2.0 + architecture diagram](2026-06-24_2c01196_docs-update-design-doc-v2-0-architecture-diagram.md) |
 | 2026-06-24 | [8a121d6](https://github.com/VishwajeetRaut/greenroom/commit/8a121d6) | [Update in design document](2026-06-24_8a121d6_update-in-design-document.md) |
