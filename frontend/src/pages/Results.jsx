@@ -81,7 +81,7 @@ export default function Results() {
       <main className="flex-1">
         <section className="mx-auto max-w-4xl px-6 py-12">
           <Link to="/dashboard" className="text-sm text-mute hover:text-cream">
-            &larr; Back to dashboard
+            &larr; Back to your interviews
           </Link>
 
           {loading ? (
@@ -256,7 +256,7 @@ export default function Results() {
                   to="/dashboard"
                   className="rounded-full border border-white/10 px-6 py-3 text-sm text-cream transition hover:border-white/25"
                 >
-                  Back to dashboard
+                  Back to your interviews
                 </Link>
               </div>
             </>
