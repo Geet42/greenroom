@@ -358,20 +358,24 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
     return None
 
 
-def _persist(question_id: str, language: str, harness_data: dict) -> None:
+def _persist_question_field(question_id: str, field: str, language: str, data) -> None:
     from services import question_bank
     from services.supabase_client import get_supabase
     sb = get_supabase()
     if not sb:
         return
     try:
-        row = sb.table("questions").select("harnesses").eq("id", question_id).execute()
-        existing = (row.data[0].get("harnesses") if row.data else None) or {}
-        existing[language] = harness_data
-        sb.table("questions").update({"harnesses": existing}).eq("id", question_id).execute()
+        row = sb.table("questions").select(field).eq("id", question_id).execute()
+        existing = (row.data[0].get(field) if row.data else None) or {}
+        existing[language] = data
+        sb.table("questions").update({field: existing}).eq("id", question_id).execute()
         question_bank.refresh()
     except Exception:
         pass
+
+
+def _persist(question_id: str, language: str, harness_data: dict) -> None:
+    _persist_question_field(question_id, "harnesses", language, harness_data)
 
 
 # ── Python/JS function-signature boilerplate ─────────────────────────────────
@@ -622,16 +626,4 @@ async def get_or_generate_signature(question: dict, language: str) -> str | None
 
 
 def _persist_signature(question_id: str, language: str, code: str) -> None:
-    from services import question_bank
-    from services.supabase_client import get_supabase
-    sb = get_supabase()
-    if not sb:
-        return
-    try:
-        row = sb.table("questions").select("signatures").eq("id", question_id).execute()
-        existing = (row.data[0].get("signatures") if row.data else None) or {}
-        existing[language] = code
-        sb.table("questions").update({"signatures": existing}).eq("id", question_id).execute()
-        question_bank.refresh()
-    except Exception:
-        pass
+    _persist_question_field(question_id, "signatures", language, code)
