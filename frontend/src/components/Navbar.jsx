@@ -48,7 +48,7 @@ export default function Navbar() {
                 to="/telemetry"
                 className="rounded-full px-4 py-2 text-sm text-mute transition hover:bg-panel hover:text-cream"
               >
-                Telemetry
+                Dashboard
               </Link>
               <button
                 onClick={handleSignOut}
