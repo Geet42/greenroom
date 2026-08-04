@@ -21,6 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_groq import ChatGroq
+from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 
 from services import guardrail
@@ -35,6 +36,16 @@ FALLBACK_API_KEY  = os.environ.get("FALLBACK_API_KEY", "")
 FALLBACK_MODEL    = os.environ.get("FALLBACK_MODEL", "llama3.3:70b")
 
 EVAL_SELF_CRITIQUE_ENABLED = os.environ.get("EVAL_SELF_CRITIQUE_ENABLED", "true").lower() == "true"
+
+# Azure OpenAI — used only for the end-of-session evaluation report (the
+# score/feedback the candidate sees after finishing): evaluate_session,
+# _self_critique, evaluate_diagram. Everything else (opening greeting, the
+# live interview conversation, question selection, guardrail checks, harness
+# generation) stays on Groq — untouched.
+AZURE_OPENAI_API_KEY    = os.environ.get("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT   = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
+AZURE_OPENAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 
 
 # ── Pydantic schemas for structured evaluation output ────────────────────────
@@ -69,6 +80,31 @@ def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
         model=GROQ_MODEL,
         temperature=temperature,
         max_tokens=max_tokens,
+    )
+
+
+def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureChatOpenAI:
+    """Evaluation-only LLM (Azure OpenAI gpt-5-mini). Used by evaluate_session,
+    _self_critique, and evaluate_diagram — nowhere else.
+
+    gpt-5-mini is a reasoning-family model: it only accepts the default
+    `temperature` (1) — passing any other value 400s — and without
+    `reasoning_effort` pinned down, hidden reasoning tokens consume the
+    `max_completion_tokens` budget before any visible output is written
+    (observed: a 700-token budget spent entirely on reasoning, zero output,
+    request errors out). `reasoning_effort="minimal"` disables that hidden
+    pass so the existing token budgets (tuned for Groq's plain chat model)
+    keep working unchanged. `temperature` is accepted for call-site
+    compatibility with `_make_llm` but not forwarded."""
+    if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+        raise RuntimeError("Azure OpenAI is not configured (AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT missing).")
+    return AzureChatOpenAI(
+        api_key=AZURE_OPENAI_API_KEY,
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+        api_version=AZURE_OPENAI_API_VERSION,
+        max_completion_tokens=max_tokens,
+        reasoning_effort="minimal",
     )
 
 
@@ -435,7 +471,7 @@ def _self_critique(track: str, role: str, transcript: str, draft: dict) -> dict:
             f"Transcript:\n{transcript or 'The candidate did not answer any questions.'}\n\n"
             f"Draft evaluation to review:\n{json.dumps(draft)}"
         )
-        llm = _make_llm(temperature=0.2, max_tokens=700)
+        llm = _make_azure_llm(temperature=0.2, max_tokens=700)
         llm_json = llm.bind(response_format={"type": "json_object"})
         parser = JsonOutputParser(pydantic_object=EvaluationResult)
         chain = llm_json | parser
@@ -490,7 +526,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
     parser = JsonOutputParser(pydantic_object=EvaluationResult)
 
     try:
-        llm = _make_llm(temperature=0.3, max_tokens=700)
+        llm = _make_azure_llm(temperature=0.3, max_tokens=700)
         llm_json = llm.bind(response_format={"type": "json_object"})
         chain = llm_json | parser
         result = chain.invoke(lc_messages)
@@ -626,7 +662,7 @@ def evaluate_diagram(
     }
 
     try:
-        llm_client = _make_llm(temperature=0.1, max_tokens=400)
+        llm_client = _make_azure_llm(temperature=0.1, max_tokens=400)
         llm_json = llm_client.bind(response_format={"type": "json_object"})
         chain = llm_json | JsonOutputParser()
         result = chain.invoke([HumanMessage(content=prompt)])

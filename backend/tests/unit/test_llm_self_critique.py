@@ -16,7 +16,7 @@ def _draft():
 
 
 class _FakeBoundLLM:
-    """Stands in for `_make_llm(...).bind(...)`; supports `| parser` like a real Runnable."""
+    """Stands in for `_make_azure_llm(...).bind(...)`; supports `| parser` like a real Runnable."""
 
     def __init__(self, chain):
         self._chain = chain
@@ -28,7 +28,7 @@ class _FakeBoundLLM:
 def test_self_critique_disabled_returns_draft_unchanged():
     draft = _draft()
     with patch.object(llm, "EVAL_SELF_CRITIQUE_ENABLED", False), \
-         patch.object(llm, "_make_llm") as make_llm:
+         patch.object(llm, "_make_azure_llm") as make_llm:
         result = llm._self_critique("technical", "backend", "transcript", draft)
     make_llm.assert_not_called()
     assert result is draft
@@ -49,7 +49,7 @@ def test_self_critique_applies_reviewer_revision():
     make_llm_result.bind.return_value = _FakeBoundLLM(chain)
 
     with patch.object(llm, "EVAL_SELF_CRITIQUE_ENABLED", True), \
-         patch.object(llm, "_make_llm", return_value=make_llm_result):
+         patch.object(llm, "_make_azure_llm", return_value=make_llm_result):
         result = llm._self_critique("technical", "backend", "transcript", draft)
 
     assert result["overall_score"] == 3
@@ -59,6 +59,6 @@ def test_self_critique_applies_reviewer_revision():
 def test_self_critique_falls_back_to_draft_on_error():
     draft = _draft()
     with patch.object(llm, "EVAL_SELF_CRITIQUE_ENABLED", True), \
-         patch.object(llm, "_make_llm", side_effect=RuntimeError("no key")):
+         patch.object(llm, "_make_azure_llm", side_effect=RuntimeError("no key")):
         result = llm._self_critique("technical", "backend", "transcript", draft)
     assert result == draft
