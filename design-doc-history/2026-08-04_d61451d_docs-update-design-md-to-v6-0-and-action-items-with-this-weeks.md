@@ -84,7 +84,7 @@ A complete session moves through the following steps:
 
 ### LangChain LCEL chains
 
-All LLM interactions use LangChain Expression Language rather than plain API calls. LCEL chains inject the full typed conversation history (`AIMessage` / `HumanMessage`) on every request via `MessagesPlaceholder`. `JsonOutputParser` validates LLM output against a Pydantic schema at parse time. Swapping the LLM provider requires changing one line.
+All LLM interactions use LangChain Expression Language rather than plain API calls. LCEL chains inject the full typed conversation history (`AIMessage` / `HumanMessage`) on every request via `MessagesPlaceholder`. `JsonOutputParser` validates LLM output against a Pydantic schema at parse time. Swapping the LLM provider requires changing one line — proven this week: the end-of-session evaluation report (`evaluate_session`, `_self_critique`, `evaluate_diagram`) now runs on **Azure OpenAI (gpt-5-mini)** instead of Groq, via a second `_make_azure_llm()` factory alongside the existing `_make_llm()`. Everything else — the opening greeting, the live interview conversation, question selection, guardrail checks, harness generation — stays on Groq, unchanged. gpt-5-mini is a reasoning-family model: it only accepts the default `temperature` (passing anything else 400s) and silently burns its whole token budget on hidden reasoning unless `reasoning_effort="minimal"` is set, which is why the two factories aren't simply unified into one.
 
 | Dimension | Plain API call | Greenroom (LCEL) |
 |---|---|---|
@@ -219,7 +219,7 @@ When a system-design session ends, `llm.evaluate_diagram()` scores the candidate
   - 295 technical: LeetCodeDataset (Kaggle / newfacade, MIT) + CodeContests (DeepMind, CC-BY-4.0) + `neenza/leetcode-problems` (boilerplate source) + 8 hand-written; all constraints and examples filled
   - 42 behavioral: `ashishps1/awesome-behavioral-interviews`; each with `expected_elements` (STAR components)
   - 20 system-design: `donnemartin/system-design-primer`; each with `expected_components` for diagram scoring
-- **LLM pipeline:** Groq (Llama 3.3 70B) primary with Ollama Cloud fallback; LangChain LCEL chains; four-layer guardrail; self-critique reviewer pass on the evaluation chain
+- **LLM pipeline:** Groq (Llama 3.3 70B) primary with Ollama Cloud fallback for the live interview (greeting, conversation, question selection); Azure OpenAI (gpt-5-mini) for the end-of-session evaluation report and self-critique pass; LangChain LCEL chains throughout; four-layer guardrail
 - **Code execution:** Judge0 public instance (primary) → Judge0 via RapidAPI (secondary) → local in-container subprocess (Python/Node/C++ last resort) — self-hosted Piston and Wandbox both retired this week after being confirmed dead in production; ad-hoc Java/C++ test support for interviewer-invented problems
 - **Auth:** Supabase email/password + PKCE OAuth; JWT validated server-side on every request; Postgres RLS
 - **Rate limiter:** Postgres sliding-window (30 req/min standard, 20 req/min code); in-memory fallback; TTS gated behind the same auth + rate limit as every other endpoint; analytics event/stats endpoints rate-limited and payload-size-bound (previously the only unguarded routes)
@@ -340,6 +340,13 @@ SESSION_IDLE_TIMEOUT_MINUTES=30        # Default: 30
 MAX_CANDIDATE_TURNS=15                 # Default: 15
 EVAL_SELF_CRITIQUE_ENABLED=true        # Default: true
 
+# Azure OpenAI — end-of-session evaluation report only (evaluate_session,
+# _self_critique, evaluate_diagram). Live interview conversation stays on Groq.
+AZURE_OPENAI_API_KEY=                  # https://portal.azure.com -> your OpenAI resource -> Keys
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT=gpt-5-mini     # Default shown
+AZURE_OPENAI_API_VERSION=2024-12-01-preview  # Default shown
+
 # Code execution (backend/services/piston.py) — Judge0, not self-hosted Piston.
 # Public Judge0 needs no key and is tried first; RapidAPI key is optional but
 # recommended as a more reliable second attempt. If both are unavailable,
@@ -413,7 +420,7 @@ backend/
     tts.py                   # TTS endpoint, auth-gated and rate-limited like every other route
     analytics.py             # Rate-limited, payload-bound usage/click event ingestion + GET /stats for the dashboard
   services/
-    llm.py                   # LangChain LCEL chains: opening_message, next_question, evaluate_session (+ self-critique pass), evaluate_diagram (now reads autosaved diagram_elements directly)
+    llm.py                   # LangChain LCEL chains: opening_message/next_question on Groq; evaluate_session (+ self-critique pass) and evaluate_diagram (now reads autosaved diagram_elements directly) on Azure OpenAI gpt-5-mini
     piston.py                # run_code(): Judge0 public -> Judge0 RapidAPI -> local subprocess -> unavailable (module name kept from the retired Piston era; no longer talks to Piston)
     adhoc_harness.py         # Java/C++ test support for interviewer-invented (non-bank) problems — reuses harness_generator's machinery, keyed by problem text, in-memory cache only
     rate_limit.py            # Sliding-window per-user rate limiter: Postgres primary, in-memory fallback
@@ -623,7 +630,7 @@ Every service has a direct Azure-native equivalent. Moving is a configuration ch
 
 | Current | Azure equivalent | Change required |
 |---|---|---|
-| Groq (Llama 3.3 70B) | Azure OpenAI GPT-4o via AI Foundry | 1 line in `llm.py` |
+| Groq (Llama 3.3 70B) — live interview only | Azure OpenAI via AI Foundry | 1 line in `llm.py`; the evaluation-report half of this migration already shipped this week (`_make_azure_llm`, gpt-5-mini) — only the live-conversation calls (`_make_llm`) remain on Groq |
 | Web Speech API (browser STT) | Azure Speech Services real-time STT | Replace browser STT hook |
 | edge-tts | Azure Neural TTS | Update `tts.py` |
 | Supabase Postgres | Azure Cosmos DB for PostgreSQL | Update connection string |

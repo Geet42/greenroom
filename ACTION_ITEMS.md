@@ -213,10 +213,24 @@ What actually shipped, version by version, per the design doc's own
   `harness_generator.py`'s duplicate `_persist`/`_persist_signature` helpers
   into one, and moved an orphaned migration file into `supabase/migrations/`.
 
+- **Moved the end-of-session evaluation report to Azure OpenAI (gpt-5-mini)**
+  (`365b9d8`) — `evaluate_session`, `_self_critique`, and `evaluate_diagram`
+  now run on Azure OpenAI instead of Groq; the live interview conversation,
+  question selection, guardrail, and harness generation all stay on Groq,
+  unchanged. Required `reasoning_effort="minimal"` since gpt-5-mini is a
+  reasoning-family model that otherwise silently burns its whole token
+  budget on hidden reasoning before writing visible output.
+
 ## Open items
 
 Carried forward, not yet picked up:
 
+- **`deploy.sh` still references the retired Piston container** —
+  `PISTON_INTERNAL`/`PISTON_IMAGE` variables and a `greenroom-piston.internal`
+  URL are still set and passed through, inconsistent with this week's Judge0
+  migration (the GitHub Actions CI/CD pipeline is the actual live deploy
+  path; unclear if `deploy.sh` is still used or itself leftover — worth
+  confirming and either updating or removing it).
 - **Leftover self-hosted-Piston config** — the `piston/` directory
   (Dockerfile, fly.toml, install script) and the `piston/**` CI trigger path
   are dead weight after this week's Judge0 migration; not yet deleted.
