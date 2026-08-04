@@ -147,11 +147,11 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
                 )
             elif session["track"] == "system-design":
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_system_design_question
+                    question_bank.pick_system_design_question, None, session["role"]
                 )
             else:
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_behavioral_question
+                    question_bank.pick_behavioral_question, None, None, session["role"]
                 )
             if session["assigned_question"]:
                 session.setdefault("asked_question_ids", set()).add(session["assigned_question"]["id"])
