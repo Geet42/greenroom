@@ -547,14 +547,70 @@ def _extract_diagram_descriptions(history: list[dict]) -> str:
     return "\n\n---\n\n".join(diagrams)
 
 
-def evaluate_diagram(history: list[dict], assigned_question: dict) -> dict:
+_SHAPE_TYPES = {"rectangle", "ellipse", "diamond", "triangle", "trapezoid", "parallelogram"}
+
+
+def _describe_diagram_elements(elements: list[dict]) -> str | None:
+    """Python port of the frontend's generateBoardDescription() (see
+    useInterviewSession.js) — builds the same [Architecture diagram] text
+    from raw Excalidraw scene elements, so the autosaved board (persisted via
+    POST /api/interview/diagram) can be scored even if its final state was
+    never echoed into a chat message. Mirrors the frontend logic exactly so
+    both paths produce identical, LLM-comparable descriptions."""
+    if not elements:
+        return None
+    label_of: dict[str, str] = {}
+    for el in elements:
+        if el.get("type") == "text" and el.get("containerId"):
+            cid = el["containerId"]
+            label_of[cid] = (label_of.get(cid, "") + (el.get("text") or "").strip())
+    for el in elements:
+        if el.get("type") == "text" and not el.get("containerId") and (el.get("text") or "").strip():
+            label_of[el["id"]] = el["text"].strip()
+
+    components = [
+        label_of.get(el["id"], el["type"]) for el in elements if el.get("type") in _SHAPE_TYPES
+    ]
+    connections = []
+    for el in elements:
+        if el.get("type") != "arrow":
+            continue
+        start = (el.get("startBinding") or {}).get("elementId")
+        end = (el.get("endBinding") or {}).get("elementId")
+        if not start or not end:
+            continue
+        from_label = label_of.get(start, "node")
+        to_label = label_of.get(end, "node")
+        via = label_of.get(el["id"])
+        connections.append(f"{from_label} --[{via}]--> {to_label}" if via else f"{from_label} → {to_label}")
+
+    if not components and not connections:
+        return None
+    parts = ["[Architecture diagram]"]
+    if components:
+        parts.append(f"Components: {', '.join(components)}")
+    if connections:
+        parts.append(f"Connections: {', '.join(connections)}")
+    return "\n".join(parts)
+
+
+def evaluate_diagram(
+    history: list[dict], assigned_question: dict, diagram_elements: list[dict] | None = None,
+) -> dict:
     """
     LLM call that scores the candidate's system-design diagram against the
     expected_components list on the assigned question.
     Returns a dict matching the DiagramEvaluation model.
+
+    diagram_elements: the raw, autosaved board state (session["diagram_elements"]
+    — see POST /api/interview/diagram), preferred over parsing chat history
+    since a candidate who draws their diagram and immediately ends the session
+    never gets a chance to echo it into a message (see generateBoardDescription
+    in useInterviewSession.js, called only from handleSend). Falls back to
+    the message-embedded description for older sessions/paths.
     """
     expected = assigned_question.get("expected_components") or []
-    diagrams = _extract_diagram_descriptions(history)
+    diagrams = _describe_diagram_elements(diagram_elements) or _extract_diagram_descriptions(history)
     prompt = DIAGRAM_EVAL_PROMPT.format(
         title=assigned_question.get("title", "the assigned problem"),
         expected_components=", ".join(expected) if expected else "(not specified)",

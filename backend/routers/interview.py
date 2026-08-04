@@ -465,7 +465,9 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
         diagram_eval = None
         assigned = session.get("assigned_question")
         if session["track"] == "system-design" and assigned and assigned.get("expected_components"):
-            diagram_eval = await run_in_threadpool(llm.evaluate_diagram, session["history"], assigned)
+            diagram_eval = await run_in_threadpool(
+                llm.evaluate_diagram, session["history"], assigned, session.get("diagram_elements"),
+            )
             result["diagram_evaluation"] = diagram_eval
 
         await run_in_threadpool(persist_evaluation, req.session_id, result)
