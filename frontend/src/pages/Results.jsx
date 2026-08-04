@@ -5,6 +5,31 @@ import Footer from "../components/Footer";
 import { supabase } from "../lib/supabaseClient";
 import Losgann from "../components/Losgann";
 
+// Transcript messages may contain a fenced ```code``` block (submitted code
+// appended to the candidate's turn) alongside plain text — render the fence
+// as a monospace block instead of dumping raw backticks/newlines into a <p>.
+function renderMessageContent(content) {
+  const parts = content.split(/(```[\s\S]*?```)/g).filter((p) => p.trim());
+  return parts.map((part, i) => {
+    if (part.startsWith("```") && part.endsWith("```")) {
+      const code = part.slice(3, -3).replace(/^\n/, "");
+      return (
+        <pre
+          key={i}
+          className="mt-2 overflow-x-auto rounded-lg border border-white/10 bg-black/30 p-3 text-xs text-cream/80"
+        >
+          <code>{code}</code>
+        </pre>
+      );
+    }
+    return (
+      <p key={i} className="mt-1 whitespace-pre-wrap text-cream/90">
+        {part}
+      </p>
+    );
+  });
+}
+
 export default function Results() {
   const { sessionId } = useParams();
   const [session, setSession] = useState(null);
@@ -211,7 +236,7 @@ export default function Results() {
                       <p className={`font-display ${m.role === "interviewer" ? "text-cream" : "text-amber"}`}>
                         {m.role === "interviewer" ? "Interviewer" : "You"}
                       </p>
-                      <p className="mt-1 text-cream/90">{m.content}</p>
+                      {renderMessageContent(m.content)}
                     </div>
                   ))}
                   {messages.length === 0 && (
