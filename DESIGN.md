@@ -48,9 +48,9 @@ Greenroom is a three-service web application. The candidate interacts through a 
 
 ![System Architecture](docs/diagrams/architecture.png)
 
-> **Color guide:** Blue = core services, Green = Azure backend, Yellow = guardrail / LLM providers, Orange = external execution and TTS, Red = Piston sandbox (internal only), Purple = CI/CD
+> **Color guide:** Blue = client-facing core service, Green = Azure backend components, Yellow = guardrail engine / LLM providers (both conversation and evaluation), Orange = external TTS, Red = external code execution (no SLA), Purple = CI/CD
 >
-> **Diagram note (2026-08):** the self-hosted Piston sandbox shown in red was retired this week and replaced with Judge0 (see §3, "Judge0-based code execution"). The diagram images themselves are kept as-is per the existing archival convention — read "Piston sandbox (internal only)" below as historical; the current execution chain is Judge0 public → Judge0 RapidAPI → local subprocess fallback, all external/no internal-only container.
+> **Updated 2026-08-04** to replace the retired self-hosted Piston sandbox with Judge0 (public → RapidAPI, both external — no more internal-only container), and to show the Guardrail Engine and Evaluation Engine as their own components instead of folded into the LLM Orchestrator, plus Analytics/Telemetry, the Ad-hoc Harness Generator, and TTS's disk cache. Source: `docs/diagrams/architecture.puml` (PlantUML) — regenerate with `plantuml docs/diagrams/architecture.puml`.
 
 ### 2.2 User Flow
 

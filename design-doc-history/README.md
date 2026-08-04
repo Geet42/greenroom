@@ -16,7 +16,7 @@ older snapshot shows the diagrams as they looked at the time, not today's:
 |---|---|
 | `2026-06_proposed-architecture-interview-session-flow.png` | 1 — the earliest proposed architecture diagram of any kind for this project, from the pre-POC pitch/sprint deck (`MockBot_Final.pptx`, Sprint 2 / Week 2, "Architecture: Interview Session Flow" — the first of two architecture slides in that deck). Never embedded inline in a `DESIGN.md`/dev-design-doc Markdown file; kept here as the original proposed-architecture artifact, referenced from the pre-POC entry below. |
 | `architecture.svg` | 1 — added 2026-06-24 ([2c01196](https://github.com/VishwajeetRaut/greenroom/commit/2c01196)), used only by the two v2.0-era snapshots before the doc moved to `docs/diagrams/*.png` |
-| `architecture.png` | 2 — 2026-06-30 ([33152fa](https://github.com/VishwajeetRaut/greenroom/commit/33152fa)), 2026-07-08 ([9b380dd](https://github.com/VishwajeetRaut/greenroom/commit/9b380dd), current) |
+| `architecture.png` | 3 — 2026-06-30 ([33152fa](https://github.com/VishwajeetRaut/greenroom/commit/33152fa)), 2026-07-08 ([9b380dd](https://github.com/VishwajeetRaut/greenroom/commit/9b380dd)), 2026-08-04 (`architecture-judge0-eval-guardrail-split.png`, current) — regenerated from `docs/diagrams/architecture.puml` (PlantUML, now checked in) to replace the retired Piston sandbox with Judge0 and add the Guardrail Engine, Evaluation Engine, Analytics/Telemetry, and Ad-hoc Harness Generator as their own components |
 | `user-flow.png` | 2 — same two commits |
 | `developer-flow.png` | 2 — same two commits |
 | `legend.png` | 1 — added 2026-06-30, never changed since; not embedded inline in any snapshot's Markdown but kept for completeness |

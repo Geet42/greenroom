@@ -1,0 +1,142 @@
+@startuml architecture
+title Greenroom — System Architecture
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam linetype ortho
+skinparam nodesep 48
+skinparam ranksep 65
+skinparam padding 5
+skinparam roundcorner 6
+skinparam defaultTextAlignment center
+skinparam ArrowColor #55606B
+skinparam ArrowThickness 1.2
+skinparam ArrowFontSize 12
+skinparam ArrowFontColor #33393F
+skinparam titleFontSize 24
+skinparam titleFontStyle bold
+skinparam package {
+  FontStyle bold
+  FontSize 13
+  BorderColor #8A8A8A
+  BorderThickness 1.4
+}
+skinparam component {
+  BorderColor #55606B
+  BorderThickness 1.2
+  FontSize 12
+  BackgroundColor #EAF7EC
+}
+skinparam database {
+  BorderColor #55606B
+  FontSize 12
+}
+skinparam note {
+  BackgroundColor #FFFFFF
+  BorderColor #AAAAAA
+  FontSize 11
+}
+skinparam actor {
+  BorderColor #55606B
+}
+
+actor "Candidate\n(Chrome / Edge)" as candidate
+
+package "GitHub" #EDE1F7 {
+  component "GitHub Actions\nOIDC · no static credentials" as ghactions
+}
+
+package "Supabase Cloud" #D7E9FA {
+  component "Supabase Auth\nPKCE · JWT issuer" as supaauth
+  database "Postgres + RLS\nsessions · messages · evaluations\nquestions · analytics_events" as supadb
+}
+
+package "Azure Container Apps  ·  Private VNet  ·  OIDC CI/CD" #F2FAF3 {
+
+  package "Backend API  ·  FastAPI  ·  2 replicas" #DDF3E2 {
+    component "Frontend\nReact + Vite + Nginx" as frontend #D7E9FA
+    component "Auth Guard\nJWT + dual ownership check" as authguard
+    component "Session Guard\nrate · cap (3) · idle 30 min -> 410" as sessionguard
+    component "Session Cache\nasyncio.Lock per session\n⚠ in-memory: per-replica only" as sessioncache
+
+    together {
+      component "LLM Orchestrator\nGroq -> Ollama fallback\nlive conversation" as llmorchestrator
+      component "Evaluation Engine\nAzure OpenAI (gpt-5-mini)\nevaluate_session + self-critique\n+ evaluate_diagram" as evalengine
+      component "TTS Service\nEdge neural · disk cache (LRU)" as ttsservice
+      component "Code Exec Coordinator\nPOST /code/test" as codeexec
+    }
+
+    together {
+      component "Guardrail Engine\nregex -> regenerate -> fallback" as guardrail #FBF0C4
+      component "Harness Generator\nbank Qs · sandbox-verified" as harnessgen
+      component "Ad-hoc Harness Generator\ninterviewer-invented problems" as adhocharness
+    }
+
+    component "Analytics / Telemetry\nevent ingestion + GET /stats" as analytics
+  }
+}
+
+package "LLM Providers" #FBF0C4 {
+  component "Groq API\nllama-3.3-70b" as groq
+  component "Azure OpenAI\ngpt-5-mini · AI Foundry" as azureopenai
+  component "Ollama Cloud\nfallback 429/5xx" as ollama
+}
+
+package "External" #FCE7CC {
+  component "Microsoft Edge TTS\nno API key needed" as edgetts
+}
+
+package "Code Execution (external, no SLA)" #FAD9DC {
+  component "Judge0 Public\nce.judge0.com" as judge0public
+  component "Judge0 RapidAPI\noptional key" as judge0rapid
+}
+
+note bottom of codeexec
+  Local subprocess fallback runs
+  **inside the backend's own
+  container** (Python/Node/C++
+  only — no isolation, no Java)
+end note
+
+' ── invisible edges: pin left-to-right package order so the layout
+' ── engine can't flip Code Execution/LLM Providers to the wrong side
+supadb -[hidden]right-> ghactions
+ghactions -[hidden]right-> llmorchestrator
+llmorchestrator -[hidden]right-> groq
+groq -[hidden]right-> edgetts
+edgetts -[hidden]right-> judge0public
+
+' ── flows ──────────────────────────────────────────────────────────
+candidate -down-> frontend : ① HTTPS
+frontend -up-> supaauth : ② PKCE · anon key
+frontend -down-> authguard : ③ /api/* · Bearer JWT
+authguard -up-> supaauth : ④ validate JWT
+authguard -up-> supadb : ④ svc-role key
+authguard -down-> sessionguard
+sessionguard -right-> sessioncache
+
+sessionguard -down-> llmorchestrator
+sessionguard -down-> ttsservice
+sessionguard -down-> codeexec
+
+llmorchestrator -right-> evalengine : end
+llmorchestrator -down-> guardrail : draft output
+guardrail -up-> llmorchestrator : regenerate on leak
+
+llmorchestrator -right-> groq : ⑤ primary call
+evalengine -right-> azureopenai : ⑤ eval-only call
+groq -down-> ollama : fallback
+
+ttsservice -right-> edgetts : synthesize
+
+codeexec -down-> harnessgen : get harness
+codeexec -down-> adhocharness : get harness
+codeexec -right-> judge0public : ⑥ execute
+judge0public -down-> judge0rapid : fallback
+
+analytics -up-> supadb : background write
+
+ghactions -down-> frontend : deploy
+
+@enduml
