@@ -414,6 +414,7 @@ async def delete_session(session_id: str, user: AuthenticatedUser = Depends(get_
 
     await _delete("evaluations", "session_id")
     await _delete("messages", "session_id")
+    await _delete("analytics_events", "session_id")
     await _delete("sessions", "id")
     return {"deleted": session_id}
 
