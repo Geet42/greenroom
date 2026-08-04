@@ -49,6 +49,15 @@ class StartSessionResponse(BaseModel):
     question: str
 
 
+class SessionSummary(BaseModel):
+    id: str
+    track: str
+    role: Optional[str] = None
+    overall_score: Optional[int] = None
+    status: str
+    created_at: str
+
+
 class MessageRequest(BaseModel):
     session_id: str
     message: str = Field(min_length=1, max_length=20_000)
