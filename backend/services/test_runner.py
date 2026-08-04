@@ -186,9 +186,23 @@ def _pyliteral_to_js(text: str) -> str:
     return text
 
 
+_JS_CONSTRUCTOR_CALL = re.compile(r"(^|[=;]\s*)([A-Z]\w*)\(")
+
+
+def _add_js_new_keywords(text: str) -> str:
+    """Bank 'call' strings use Python/LeetCode instantiation syntax —
+    "Solution().method(...)" or "obj = LRUCache(2); obj.put(...)" — which is
+    valid Python (constructors are called bare) but throws in JS ("Class
+    constructor X cannot be invoked without 'new'"). Only matches a capitalized
+    identifier at the start of the call or right after "=" / ";" (a fresh
+    instantiation position), not after "." (a method call), so this can't
+    misfire on a capitalized method name."""
+    return _JS_CONSTRUCTOR_CALL.sub(r"\1new \2(", text)
+
+
 def _node_harness(source: str, cases: list[dict]) -> str:
     cases = [
-        {**tc, "call": _pyliteral_to_js(tc["call"]), "expected": _pyliteral_to_js(tc["expected"])}
+        {**tc, "call": _add_js_new_keywords(_pyliteral_to_js(tc["call"])), "expected": _pyliteral_to_js(tc["expected"])}
         for tc in cases
     ]
     cases_json = json.dumps(cases)
