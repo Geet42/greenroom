@@ -122,6 +122,18 @@ app.include_router(tts.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 
 
+# Judge0's reachability result, cached briefly — /api/health is hit
+# repeatedly (Azure Container Apps liveness/readiness probes, external
+# monitoring, this backend's own k6 load test) and without this, EVERY hit
+# fired a fresh external call at Judge0's public API, which has no SLA and
+# isn't ours to hammer. Found via infra/loadtest/health_baseline.js: a single
+# 3-minute local load test at ~50 concurrent req/s sent ~8,600 requests to
+# Judge0 just from health checks. 30s is generous relative to how fast
+# Judge0's actual up/down state changes, cheap relative to probe frequency.
+_JUDGE0_HEALTH_CACHE_SECONDS = 30
+_judge0_health_cache: dict[str, object] = {"status": None, "checked_at": 0.0}
+
+
 @app.get("/api/health")
 async def health():
     """
@@ -139,17 +151,24 @@ async def health():
     sb = get_supabase()
     checks["supabase"] = "ok" if sb else "unconfigured"
 
-    # Judge0 reachability (fire-and-forget, 3 s timeout). Checks the public
-    # instance only — RapidAPI's key-gated instance isn't cheap to probe
-    # without burning a quota'd request, and the code path already falls
-    # back to local subprocess execution if both are down.
-    judge0_url = os.environ.get("JUDGE0_PUBLIC_URL", "https://ce.judge0.com")
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            r = await client.get(f"{judge0_url}/languages")
-            checks["judge0"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
-    except Exception:
-        checks["judge0"] = "unreachable"
+    # Judge0 reachability (fire-and-forget, 3 s timeout, cached — see
+    # _JUDGE0_HEALTH_CACHE_SECONDS above). Checks the public instance only —
+    # RapidAPI's key-gated instance isn't cheap to probe without burning a
+    # quota'd request, and the code path already falls back to local
+    # subprocess execution if both are down.
+    now_monotonic = time.monotonic()
+    if now_monotonic - _judge0_health_cache["checked_at"] < _JUDGE0_HEALTH_CACHE_SECONDS:
+        checks["judge0"] = _judge0_health_cache["status"]
+    else:
+        judge0_url = os.environ.get("JUDGE0_PUBLIC_URL", "https://ce.judge0.com")
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                r = await client.get(f"{judge0_url}/languages")
+                checks["judge0"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
+        except Exception:
+            checks["judge0"] = "unreachable"
+        _judge0_health_cache["status"] = checks["judge0"]
+        _judge0_health_cache["checked_at"] = now_monotonic
 
     # Groq key present (we can't call it cheaply; just assert it's configured)
     checks["groq"] = "configured" if os.environ.get("GROQ_API_KEY") else "unconfigured"
