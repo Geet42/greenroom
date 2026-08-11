@@ -12,6 +12,7 @@ import asyncio
 import json
 import re
 
+from services import singleflight
 from services.logger import log
 
 # ── Step 1: LLM generates test-case data only ────────────────────────────────
@@ -258,12 +259,19 @@ _hidden.forEach((_tc, _i) => {{
 # these same cases via services.adhoc_harness) drift out of sync with what
 # Python/JS are actually testing.
 _CASES_CACHE: dict[str, list[dict] | None] = {}
+_cases_locks = singleflight.KeyedLocks()
 
 
 def get_or_generate_cases(problem: str) -> list[dict] | None:
-    if problem not in _CASES_CACHE:
-        _CASES_CACHE[problem] = _generate_cases(problem)
-    return _CASES_CACHE[problem]
+    if problem in _CASES_CACHE:
+        return _CASES_CACHE[problem]
+    # Coalesces concurrent misses for the same problem (e.g. two "Run Tests"
+    # clicks before the first LLM call returns) into a single LLM call —
+    # without this lock, both callers would independently generate cases.
+    with _cases_locks.get(problem):
+        if problem not in _CASES_CACHE:
+            _CASES_CACHE[problem] = _generate_cases(problem)
+        return _CASES_CACHE[problem]
 
 
 def generate_harness(language: str, source: str, history: list[dict], assigned_question: dict | None = None) -> str | None:

@@ -37,6 +37,18 @@ FALLBACK_MODEL    = os.environ.get("FALLBACK_MODEL", "llama3.3:70b")
 
 EVAL_SELF_CRITIQUE_ENABLED = os.environ.get("EVAL_SELF_CRITIQUE_ENABLED", "true").lower() == "true"
 
+# Neither ChatGroq nor AzureChatOpenAI had an explicit timeout before this —
+# only the Ollama fallback (_fallback_chat) did. Without one, a slow/hanging
+# upstream call has no bound of its own and falls through to the SDK's
+# default (commonly several minutes), which from the candidate's side looks
+# indistinguishable from the report generator being stuck. These fail fast
+# into the existing fallback/error path instead.
+LLM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS", "45"))
+# Azure's gpt-5-mini is a reasoning model — even with reasoning_effort="minimal"
+# it can legitimately take longer than a plain chat completion, so this gets
+# more headroom than the Groq timeout above rather than sharing one value.
+EVAL_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("EVAL_REQUEST_TIMEOUT_SECONDS", "60"))
+
 # Rough chars-per-token estimate (~4) applied to keep the evaluation prompt's
 # input side bounded — MessageRequest.message allows up to 20,000 chars per
 # turn (models.py) with no cap on total transcript size, so a long session
@@ -87,6 +99,7 @@ def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
         model=GROQ_MODEL,
         temperature=temperature,
         max_tokens=max_tokens,
+        request_timeout=LLM_REQUEST_TIMEOUT_SECONDS,
     )
 
 
@@ -112,6 +125,7 @@ def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureCha
         api_version=AZURE_OPENAI_API_VERSION,
         max_completion_tokens=max_tokens,
         reasoning_effort="minimal",
+        request_timeout=EVAL_REQUEST_TIMEOUT_SECONDS,
     )
 
 

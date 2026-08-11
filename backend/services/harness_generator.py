@@ -27,7 +27,7 @@ import re
 
 import httpx
 
-from services import piston
+from services import piston, singleflight
 from services.logger import log
 
 _BOUNDARY = "###---{}---###"
@@ -309,6 +309,12 @@ _GENERATION_ATTEMPTS = 4
 # already proven to fail, indefinitely.
 _UNSUPPORTED_MARKER = {"unsupported": True}
 
+# Coalesces concurrent generation for the same (question_id, language) —
+# e.g. two candidates hitting a bank question's first-ever Java run at the
+# same time — into one LLM+sandbox+Supabase round trip instead of each
+# paying for their own.
+_generation_locks = singleflight.AsyncKeyedLocks()
+
 
 async def get_or_generate(question: dict, language: str) -> dict | None:
     """Returns {"boilerplate": ..., "harness": ...} for this (question, language)
@@ -341,24 +347,36 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         return cached
 
     import asyncio
-    feedback = None
-    for attempt in range(1, _GENERATION_ATTEMPTS + 1):
-        spec = await asyncio.to_thread(_generate, language, question, feedback)
-        if not spec:
-            feedback = None  # generation itself failed (not a compile error) — nothing useful to correct
-            continue
+    lock_key = (question["id"], language)
+    async with await _generation_locks.get(lock_key):
+        # Re-check now that we hold the lock — another concurrent caller for
+        # the same question/language may have just finished and persisted.
+        cached = (question.get("harnesses") or {}).get(language)
+        if cached == _UNSUPPORTED_MARKER:
+            return None
+        if cached:
+            return cached
 
-        ok, err = await _verify(language, spec, len(question["tests"]))
-        if not ok:
-            feedback = err
-            continue
+        feedback = None
+        for attempt in range(1, _GENERATION_ATTEMPTS + 1):
+            spec = await asyncio.to_thread(_generate, language, question, feedback)
+            if not spec:
+                feedback = None  # generation itself failed (not a compile error) — nothing useful to correct
+                continue
 
-        harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
-        await asyncio.to_thread(_persist, question["id"], language, harness_data)
-        return harness_data
+            ok, err = await _verify(language, spec, len(question["tests"]))
+            if not ok:
+                feedback = err
+                continue
 
-    await asyncio.to_thread(_persist, question["id"], language, _UNSUPPORTED_MARKER)
-    return None
+            harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
+            question.setdefault("harnesses", {})[language] = harness_data
+            await asyncio.to_thread(_persist, question["id"], language, harness_data)
+            return harness_data
+
+        question.setdefault("harnesses", {})[language] = _UNSUPPORTED_MARKER
+        await asyncio.to_thread(_persist, question["id"], language, _UNSUPPORTED_MARKER)
+        return None
 
 
 def _persist_question_field(question_id: str, field: str, language: str, data) -> None:
