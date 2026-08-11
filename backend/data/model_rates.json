@@ -1,0 +1,27 @@
+{
+  "_comment": "Fill in your ACTUAL plan's $/1M-token rates below — none are pre-filled, since guessing at pricing would silently misinform cost decisions. Get these from: Groq console billing page, your Ollama Cloud plan, and your Azure OpenAI resource's pricing tier (Azure plans/regions vary). scripts/benchmark_models.py reports 'no rate configured' and skips cost math for any model left null here — it never fabricates a number.",
+  "llama-3.3-70b-versatile": {
+    "provider": "groq",
+    "used_for": "live interview conversation, question selection, guardrail checks (services/llm.py, question_generator.py)",
+    "input_per_1m_usd": null,
+    "output_per_1m_usd": null
+  },
+  "llama3.3:70b": {
+    "provider": "ollama-cloud",
+    "used_for": "fallback when Groq returns 429/5xx (code default — check your actual FALLBACK_MODEL env var, it may differ)",
+    "input_per_1m_usd": null,
+    "output_per_1m_usd": null
+  },
+  "gpt-oss:20b": {
+    "provider": "ollama-cloud",
+    "used_for": "fallback when Groq returns 429/5xx — a reasoning model; noticeably slower than the two above per services/test_runner.py's own comments on it burning tokens on hidden reasoning",
+    "input_per_1m_usd": null,
+    "output_per_1m_usd": null
+  },
+  "gpt-5-mini": {
+    "provider": "azure-openai",
+    "used_for": "end-of-session evaluation report only (evaluate_session, _self_critique, evaluate_diagram)",
+    "input_per_1m_usd": null,
+    "output_per_1m_usd": null
+  }
+}
