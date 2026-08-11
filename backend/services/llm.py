@@ -37,6 +37,13 @@ FALLBACK_MODEL    = os.environ.get("FALLBACK_MODEL", "llama3.3:70b")
 
 EVAL_SELF_CRITIQUE_ENABLED = os.environ.get("EVAL_SELF_CRITIQUE_ENABLED", "true").lower() == "true"
 
+# Rough chars-per-token estimate (~4) applied to keep the evaluation prompt's
+# input side bounded — MessageRequest.message allows up to 20,000 chars per
+# turn (models.py) with no cap on total transcript size, so a long session
+# could otherwise blow well past the eval model's context/cost budget with no
+# guard at all (only the output side was capped, via max_tokens=700 below).
+EVAL_MAX_TRANSCRIPT_CHARS = int(os.environ.get("EVAL_MAX_TRANSCRIPT_CHARS", "24000"))
+
 # Azure OpenAI — used only for the end-of-session evaluation report (the
 # score/feedback the candidate sees after finishing): evaluate_session,
 # _self_critique, evaluate_diagram. Everything else (opening greeting, the
@@ -501,6 +508,37 @@ def _validate_eval_result(result: dict) -> dict:
     return validated.model_dump()
 
 
+def _bounded_transcript(history: list[dict], max_chars: int = EVAL_MAX_TRANSCRIPT_CHARS) -> str:
+    """Joins `history` into "Role: content" lines, bounded to max_chars.
+
+    Keeps the FIRST turn (sets up what problem/context the rest refers to)
+    and as many of the MOST RECENT turns as fit — those carry the most
+    eval-relevant signal (final approach, complexity discussion, etc.) —
+    dropping the middle with an explicit marker rather than silently
+    truncating mid-message or growing the prompt unbounded."""
+    lines = [
+        f"{'Interviewer' if t['role'] == 'interviewer' else 'Candidate'}: {t['content']}"
+        for t in history
+    ]
+    full = "\n".join(lines)
+    if len(full) <= max_chars or len(lines) <= 2:
+        return full
+
+    first = lines[0]
+    budget = max_chars - len(first) - 100  # headroom for the marker line
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines[1:]):
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    kept.reverse()
+    omitted = len(lines) - 1 - len(kept)
+    marker = f"[... {omitted} earlier turn(s) omitted for length ...]" if omitted > 0 else None
+    return "\n".join([first] + ([marker] if marker else []) + kept)
+
+
 def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
     """
     LangChain LCEL evaluation chain:
@@ -509,10 +547,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
       | JsonOutputParser(EvaluationResult)
     Falls back to Ollama-cloud on Groq rate-limit / server error.
     """
-    transcript = "\n".join(
-        f"{'Interviewer' if t['role'] == 'interviewer' else 'Candidate'}: {t['content']}"
-        for t in history
-    )
+    transcript = _bounded_transcript(history)
 
     system_content = EVAL_SYSTEM_PROMPT.format(track=track, role=role)
 

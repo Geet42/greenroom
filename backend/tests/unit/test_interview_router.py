@@ -9,6 +9,7 @@ test can ever touch a real database.
 """
 import uuid
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -72,6 +73,7 @@ def test_start_session_success(client):
     assert body["track"] == "behavioral"
     assert body["question"] == "Tell me about a challenge you faced."
     assert body["session_id"] in session_store.SESSIONS
+    assert body["expires_at"] is not None
 
 
 def test_start_session_rejects_invalid_track(client):
@@ -95,15 +97,14 @@ def test_message_ownership_enforced(client):
     assert resp.status_code == 403
 
 
-def test_message_turn_limit_reached_short_circuits(client):
+def test_message_rejected_after_session_duration_expires(client):
     session_id = str(uuid.uuid4())
-    turns = [{"role": "candidate", "content": "answer"}] * interview.is_turn_limit_reached.__globals__["MAX_CANDIDATE_TURNS"]
-    _seed_session(session_id, history=turns)
+    stale_start = datetime.now(timezone.utc) - timedelta(
+        minutes=session_guard.SESSION_MAX_DURATION_MINUTES + 1
+    )
+    _seed_session(session_id, created_at=stale_start)
     resp = client.post("/api/interview/message", json={"session_id": session_id, "message": "one more"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["done"] is True
-    assert "End session" in body["question"]
+    assert resp.status_code == 410
 
 
 def test_message_happy_path_behavioral_follow_up(client):
@@ -114,7 +115,6 @@ def test_message_happy_path_behavioral_follow_up(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["question"] == "Tell me more about that."
-    assert body["done"] is False
 
 
 # --- GET /interview/{session_id}/resume ------------------------------------------------

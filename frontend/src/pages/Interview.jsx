@@ -14,6 +14,19 @@ const TRACK_LABELS = {
   "system-design": "System design",
 };
 
+function formatCountdown(totalSeconds) {
+  const clamped = Math.max(0, totalSeconds);
+  const minutes = Math.floor(clamped / 60);
+  const seconds = clamped % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function countdownColorClass(totalSeconds) {
+  if (totalSeconds <= 120) return "text-coral";
+  if (totalSeconds <= 600) return "text-amber";
+  return "text-mute";
+}
+
 export default function Interview() {
   const [params, setParams] = useSearchParams();
   const track = params.get("track") || "behavioral";
@@ -52,6 +65,14 @@ export default function Interview() {
                 {TRACK_LABELS[track] || "Interview"} session
               </div>
               <div className="flex items-center gap-2">
+                {session.remainingSeconds != null && (
+                  <span
+                    title="Time remaining in this session"
+                    className={`font-mono text-xs tabular-nums ${countdownColorClass(session.remainingSeconds)}`}
+                  >
+                    ⏱ {formatCountdown(session.remainingSeconds)}
+                  </span>
+                )}
                 <button
                   onClick={session.toggleMute}
                   title={session.isMuted ? "Unmute interviewer" : "Mute interviewer"}
@@ -100,9 +121,9 @@ export default function Interview() {
                 </p>
               )}
 
-              {session.sessionFull && (
+              {session.sessionLocked && (
                 <div className="mb-3 rounded-lg border border-amber/30 bg-amber/5 px-3 py-2 text-xs text-amber-300">
-                  You've reached the session limit. Click <strong>End session</strong> above to get your scored evaluation.
+                  {session.lockMessage || "This session has ended."}
                 </div>
               )}
 
@@ -127,8 +148,8 @@ export default function Interview() {
                   value={session.answerText}
                   onChange={(e) => session.setAnswerText(e.target.value)}
                   readOnly={session.isListening}
-                  disabled={session.sessionFull}
-                  placeholder={session.sessionFull ? "Session complete — click End session above" : "Press the mic and speak, or type here"}
+                  disabled={session.sessionLocked}
+                  placeholder={session.sessionLocked ? "Session ended — your report is on its way" : "Press the mic and speak, or type here"}
                   className="mt-2 w-full resize-none rounded-lg bg-transparent text-sm text-cream outline-none disabled:opacity-50"
                   rows={3}
                 />
@@ -137,14 +158,14 @@ export default function Interview() {
               <div className="mt-4 flex items-center gap-3">
                 <button
                   onClick={session.isListening ? session.stop : session.handleStartRecording}
-                  disabled={!session.isSupported || session.sessionFull}
+                  disabled={!session.isSupported || session.sessionLocked}
                   className={`rounded-full px-5 py-2.5 text-sm font-medium transition ${
                     session.isListening ? "bg-coral text-ink" : "bg-amber text-ink hover:bg-amberDark"
                   } disabled:opacity-50`}
                 >
                   {session.isListening ? "Stop recording" : "Record answer"}
                 </button>
-                {session.isSupported && !session.isListening && !session.sessionFull && (
+                {session.isSupported && !session.isListening && !session.sessionLocked && (
                   <span className="text-xs text-mute">Hold Space to record</span>
                 )}
                 <button
@@ -155,7 +176,7 @@ export default function Interview() {
                         : {}
                     )
                   }
-                  disabled={session.sending || !session.answerText.trim() || session.sessionFull}
+                  disabled={session.sending || !session.answerText.trim() || session.sessionLocked}
                   className="rounded-full border border-white/10 px-5 py-2.5 text-sm text-cream transition hover:border-amber/40 disabled:opacity-50"
                 >
                   {session.sending ? "Sending..." : "Send answer"}

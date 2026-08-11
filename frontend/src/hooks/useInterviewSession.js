@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
 import { useSpeechRecognition } from "./useSpeechRecognition";
 import { useSpeechSynthesis } from "./useSpeechSynthesis";
@@ -45,6 +45,9 @@ function isDiagramMeaningful(elements) {
   return shapes.length >= 2 && arrows.length >= 1;
 }
 
+const SESSION_EXPIRED_MESSAGE =
+  "Your session time is up — wrapping up and generating your report now...";
+
 /**
  * Manages interview session lifecycle: init, send message, end.
  *
@@ -62,7 +65,16 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
   const [ending, setEnding] = useState(false);
   const [answerText, setAnswerText] = useState("");
   const [diagramWarning, setDiagramWarning] = useState(null);
-  const [sessionFull, setSessionFull] = useState(false);
+  // sessionLocked: no more messages can be sent (time is up, expired, etc).
+  // lockMessage: the reason shown to the candidate.
+  const [sessionLocked, setSessionLocked] = useState(false);
+  const [lockMessage, setLockMessage] = useState("");
+  // expiresAt: absolute deadline from the server (session created_at +
+  // SESSION_MAX_DURATION_MINUTES) — anchoring the countdown to this instead
+  // of a client-side timer started at page load means a refresh/resume
+  // shows the CORRECT remaining time, not a reset full countdown.
+  const [expiresAt, setExpiresAt] = useState(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(null);
   const [initialDiagramElements, setInitialDiagramElements] = useState(null);
 
   const transcriptEndRef = useRef(null);
@@ -70,6 +82,11 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
   const newMessageWhileMutedRef = useRef(false);
   const recordingBaseTextRef = useRef("");
   const spaceRecordingRef = useRef(false);
+  // Synchronous guards — state setters batch/async, so a fast double-fire
+  // (e.g. the countdown hitting 0 in the same tick a 410 comes back from an
+  // in-flight send) could otherwise call handleEnd/lockSession twice.
+  const endingRef = useRef(false);
+  const lockedRef = useRef(false);
 
   const { isSupported, isListening, transcript, interimTranscript, start, stop, reset } =
     useSpeechRecognition();
@@ -103,6 +120,68 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // sessionId is set once by init() and never changes for the life of this
+  // hook instance, so `sessionIdRef` gives handleEnd a stable reference it
+  // can read from a callback created before sessionId settles.
+  const sessionIdRef = useRef(null);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  const handleEnd = useCallback(async () => {
+    const id = sessionIdRef.current;
+    if (!id || endingRef.current) return;
+    endingRef.current = true;
+    setEnding(true);
+    stopSpeech();
+    stop();
+    try {
+      await api.endSession({ session_id: id });
+      api.trackEvent("session_end", { sessionId: id, properties: { track } });
+      navigate(`/results/${id}`);
+    } catch (err) {
+      console.error("End session failed:", err);
+      endingRef.current = false;
+      setEnding(false);
+      setMessages((prev) => [
+        ...prev,
+        { role: "interviewer", text: "I had trouble generating your report. Please try ending the session again." },
+      ]);
+    }
+  }, [track, navigate, stop, stopSpeech]);
+
+  // Locks the session against further messages and (unless told otherwise)
+  // immediately requests the evaluation report — used both when the local
+  // countdown reaches 0 and when the server rejects a message with 410
+  // (session expired), so however the expiry is discovered, the candidate
+  // ends up with a report instead of a dead end.
+  const lockSession = useCallback((message, { autoEnd = true } = {}) => {
+    if (lockedRef.current) return;
+    lockedRef.current = true;
+    setSessionLocked(true);
+    setLockMessage(message);
+    if (autoEnd) handleEnd();
+  }, [handleEnd]);
+
+  // Live countdown, ticking every second off the server-provided expiresAt
+  // deadline. Re-running this effect on session resume (expiresAt updates)
+  // means the countdown always reflects the ACTUAL time left, not a fresh
+  // 60 minutes from whenever the tab happened to load.
+  useEffect(() => {
+    if (!expiresAt) {
+      setRemainingSeconds(null);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+      setRemainingSeconds(remaining);
+      if (remaining <= 0) {
+        lockSession(SESSION_EXPIRED_MESSAGE);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [expiresAt, lockSession]);
+
   useEffect(() => {
     if (initDoneRef.current) return;
     initDoneRef.current = true;
@@ -127,6 +206,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
             if (resumed.diagram_elements?.length) {
               setInitialDiagramElements(resumed.diagram_elements);
             }
+            if (resumed.expires_at) setExpiresAt(new Date(resumed.expires_at));
             onSessionIdReady?.(resumed.session_id);
             return;
           } catch {
@@ -140,14 +220,15 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
         const res = await api.startSession({ track, role: "Software Engineer", job_description: jd });
         setSessionId(res.session_id);
         setMessages([{ role: "interviewer", text: res.question }]);
+        if (res.expires_at) setExpiresAt(new Date(res.expires_at));
         speakIfUnmuted(res.question);
         api.trackEvent("session_start", { sessionId: res.session_id, properties: { track } });
         onSessionIdReady?.(res.session_id);
       } catch (err) {
-        if (err.message?.includes("401") || err.message?.includes("403")) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           navigate("/login", { replace: true }); return;
         }
-        if (err.message?.includes("429")) {
+        if (err instanceof ApiError && err.status === 429) {
           setMessages([{ role: "interviewer", text: "You have too many active sessions. Please end an existing session from your dashboard and try again." }]);
           return;
         }
@@ -224,7 +305,7 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
    */
   const handleSend = async (extras = {}) => {
     const answer = answerText.trim();
-    if (!answer || !sessionId) return;
+    if (!answer || !sessionId || sessionLocked) return;
     if (isListening) stop();
 
     let messageToSend = answer;
@@ -257,12 +338,20 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
       setMessages((prev) => [...prev, { role: "interviewer", text: res.question }]);
       speakIfUnmuted(res.question);
       if (res.question_context && onQuestionContext) onQuestionContext(res.question_context, sessionId);
-      if (res.done) setSessionFull(true);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "interviewer", text: "Hmm, I lost connection there. Could you say that again?" },
-      ]);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 410) {
+        // Session expired server-side (duration cap or idle timeout) between
+        // our last successful message and this one — lock and fetch the
+        // report rather than showing a misleading "lost connection" retry.
+        lockSession("Your session has expired. Wrapping up and generating your report now...");
+      } else if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        navigate("/login", { replace: true });
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "interviewer", text: "Hmm, I lost connection there. Could you say that again?" },
+        ]);
+      }
     } finally {
       setSending(false);
     }
@@ -275,25 +364,6 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
     if (!sessionId) return;
     api.saveDiagram({ session_id: sessionId, elements }).catch(() => {});
   }, [sessionId]);
-
-  const handleEnd = async () => {
-    if (!sessionId || ending) return;
-    setEnding(true);
-    stopSpeech();
-    stop();
-    try {
-      await api.endSession({ session_id: sessionId });
-      api.trackEvent("session_end", { sessionId, properties: { track } });
-      navigate(`/results/${sessionId}`);
-    } catch (err) {
-      console.error("End session failed:", err);
-      setEnding(false);
-      setMessages((prev) => [
-        ...prev,
-        { role: "interviewer", text: "I had trouble generating your report. Please try ending the session again." },
-      ]);
-    }
-  };
 
   const toggleMute = () => {
     const nowMuted = !isMuted;
@@ -328,7 +398,9 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
     isMuted,
     diagramWarning,
     setDiagramWarning,
-    sessionFull,
+    sessionLocked,
+    lockMessage,
+    remainingSeconds,
     initialDiagramElements,
     saveDiagram,
     handleStartRecording,

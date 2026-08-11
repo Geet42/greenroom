@@ -47,6 +47,7 @@ class StartSessionResponse(BaseModel):
     session_id: str
     track: str
     question: str
+    expires_at: Optional[str] = None
 
 
 class SessionSummary(BaseModel):
@@ -78,7 +79,6 @@ class QuestionContext(BaseModel):
 
 class MessageResponse(BaseModel):
     question: str
-    done: bool = False
     question_context: Optional[QuestionContext] = None
 
 
@@ -98,6 +98,7 @@ class ResumeSessionResponse(BaseModel):
     history: List[HistoryMessage]
     question_context: Optional[QuestionContext] = None
     diagram_elements: List[dict] = []
+    expires_at: Optional[str] = None
 
 
 class SaveDiagramRequest(BaseModel):

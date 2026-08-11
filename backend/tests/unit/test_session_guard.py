@@ -1,5 +1,5 @@
 """Unit tests for session-level access controls: ownership, concurrent
-session cap, idle timeout, and candidate turn limit."""
+session cap, idle timeout, and absolute session duration cap."""
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -11,8 +11,9 @@ from services import session_guard
 from services.session_guard import (
     check_idle_timeout,
     check_ownership,
+    check_session_duration,
     check_session_limit,
-    is_turn_limit_reached,
+    session_expires_at,
 )
 
 
@@ -71,25 +72,41 @@ def test_check_session_limit_treats_none_count_as_zero():
         check_session_limit("user-1")  # should not raise
 
 
-# --- is_turn_limit_reached ------------------------------------------------
+# --- session_expires_at / check_session_duration ------------------------
 
-def test_turn_limit_not_reached_under_max():
-    session = {"history": [{"role": "candidate", "content": "hi"}] * 3}
-    assert is_turn_limit_reached(session) is False
-
-
-def test_turn_limit_reached_at_max():
-    session = {"history": [{"role": "candidate", "content": "hi"}] * session_guard.MAX_CANDIDATE_TURNS}
-    assert is_turn_limit_reached(session) is True
+def test_session_expires_at_none_when_no_created_at():
+    assert session_expires_at({}) is None
 
 
-def test_turn_limit_only_counts_candidate_turns():
-    history = (
-        [{"role": "interviewer", "content": "q"}] * session_guard.MAX_CANDIDATE_TURNS
-        + [{"role": "candidate", "content": "hi"}]
-    )
-    session = {"history": history}
-    assert is_turn_limit_reached(session) is False
+def test_session_expires_at_offset_from_created_at():
+    created = datetime.now(timezone.utc)
+    session = {"created_at": created}
+    expires = session_expires_at(session)
+    assert expires == created + timedelta(minutes=session_guard.SESSION_MAX_DURATION_MINUTES)
+
+
+def test_session_expires_at_parses_iso_string():
+    created = datetime.now(timezone.utc) - timedelta(minutes=5)
+    session = {"created_at": created.isoformat()}
+    expires = session_expires_at(session)
+    assert expires is not None
+
+
+def test_check_session_duration_noop_when_no_created_at():
+    check_session_duration({})  # should not raise
+
+
+def test_check_session_duration_allows_recent_session():
+    session = {"created_at": datetime.now(timezone.utc)}
+    check_session_duration(session)  # should not raise
+
+
+def test_check_session_duration_raises_after_expiry():
+    stale = datetime.now(timezone.utc) - timedelta(minutes=session_guard.SESSION_MAX_DURATION_MINUTES + 1)
+    session = {"created_at": stale}
+    with pytest.raises(HTTPException) as exc:
+        check_session_duration(session)
+    assert exc.value.status_code == 410
 
 
 # --- check_idle_timeout ------------------------------------------------

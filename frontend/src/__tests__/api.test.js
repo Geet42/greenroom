@@ -12,7 +12,12 @@ describe("api module surface", () => {
     import.meta.env.VITE_SUPABASE_ANON_KEY = "anon-key-test";
 
     // Dynamically import to pick up the stubbed env
-    const { api } = await import("../lib/api.ts");
+    const { api, ApiError } = await import("../lib/api.ts");
+
+    expect(typeof ApiError).toBe("function");
+    const err = new ApiError(410, "API error 410: expired");
+    expect(err.status).toBe(410);
+    expect(err).toBeInstanceOf(Error);
 
     const required = [
       "startSession",

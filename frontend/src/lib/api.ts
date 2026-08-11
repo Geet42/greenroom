@@ -6,6 +6,18 @@ interface RequestOptions extends RequestInit {
   headers?: Record<string, string>;
 }
 
+// Carries the HTTP status code as a real field so callers can branch on it
+// (e.g. `err.status === 410`) instead of substring-matching the message,
+// which broke silently if the message text ever changed.
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data?.session?.access_token;
@@ -19,7 +31,7 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+    throw new ApiError(res.status, `API error ${res.status}: ${text}`);
   }
   return res.json() as Promise<T>;
 }
@@ -27,7 +39,7 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
 // ── Request / response shapes ─────────────────────────────────────────────────
 
 export interface StartSessionPayload { track: string; role?: string; job_description?: string }
-export interface StartSessionResponse { session_id: string; track: string; question: string }
+export interface StartSessionResponse { session_id: string; track: string; question: string; expires_at?: string | null }
 
 export interface SendMessagePayload { session_id: string; message: string; code?: string; language?: string }
 
@@ -41,7 +53,7 @@ export interface QuestionContext {
   is_stdio: boolean;
 }
 
-export interface SendMessageResponse { question: string; done?: boolean; question_context?: QuestionContext }
+export interface SendMessageResponse { question: string; question_context?: QuestionContext }
 
 export interface RunTestsPayload { session_id: string; language: string; version: string; source: string }
 export interface TestResult { id: number; label: string; input: string; expected: string; output?: string; error?: string; passed: boolean }
@@ -82,6 +94,7 @@ export interface ResumeSessionResponse {
   history: HistoryMessage[];
   question_context?: QuestionContext;
   diagram_elements?: unknown[];
+  expires_at?: string | null;
 }
 
 export interface SaveDiagramPayload { session_id: string; elements: unknown[] }
@@ -156,7 +169,7 @@ export const api = {
     const res = await fetch(`${BASE_URL}/tts/speak?text=${encodeURIComponent(text)}`, { headers });
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`API error ${res.status}: ${errText}`);
+      throw new ApiError(res.status, `API error ${res.status}: ${errText}`);
     }
     const blob = await res.blob();
     return URL.createObjectURL(blob);

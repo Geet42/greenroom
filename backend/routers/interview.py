@@ -41,8 +41,9 @@ from services.retry import with_retry
 from services.session_guard import (
     check_idle_timeout,
     check_ownership,
+    check_session_duration,
     check_session_limit,
-    is_turn_limit_reached,
+    session_expires_at,
 )
 from services.session_store import SESSIONS, evict, get_session, now, session_lock
 from services.supabase_client import get_supabase
@@ -71,6 +72,7 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
     session_id = str(uuid.uuid4())
     greeting = await run_in_threadpool(llm.opening_message, req.track, req.role)
 
+    started_at = now()
     SESSIONS[session_id] = {
         "track": req.track,
         "role": req.role,
@@ -78,7 +80,8 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "user_id": user.id,
         "assigned_question": None,
         "next_sequence_no": 1,
-        "last_activity_at": now(),
+        "last_activity_at": started_at,
+        "created_at": started_at,
         "job_description": req.job_description or None,
         "status": "active",
         "diagram_elements": [],
@@ -91,7 +94,11 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         assigned_question_id=None,
     )
 
-    return StartSessionResponse(session_id=session_id, track=req.track, question=greeting)
+    expires_at = session_expires_at(SESSIONS[session_id])
+    return StartSessionResponse(
+        session_id=session_id, track=req.track, question=greeting,
+        expires_at=expires_at.isoformat() if expires_at else None,
+    )
 
 
 @router.get("/sessions", response_model=list[SessionSummary])
@@ -124,12 +131,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
             raise HTTPException(status_code=404, detail="Session not found")
         check_ownership(session, user)
         check_idle_timeout(session)
-
-        if is_turn_limit_reached(session):
-            return MessageResponse(
-                question="We've covered a lot of ground. Click 'End session' whenever you're ready for your scored evaluation.",
-                done=True,
-            )
+        check_session_duration(session)
 
         candidate_content = req.message
         if req.code:
@@ -208,7 +210,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         if (is_first_reply or wants_new_question) and session.get("assigned_question")
         else None
     )
-    return MessageResponse(question=question, question_context=ctx, done=is_turn_limit_reached(session))
+    return MessageResponse(question=question, question_context=ctx)
 
 
 @router.get("/{session_id}/boilerplate", response_model=BoilerplateResponse)
@@ -277,12 +279,14 @@ async def resume_session(session_id: str, user: AuthenticatedUser = Depends(get_
     session["last_activity_at"] = now()
 
     ctx = _question_context(session["assigned_question"]) if session.get("assigned_question") else None
+    expires_at = session_expires_at(session)
     return ResumeSessionResponse(
         session_id=session_id,
         track=session["track"],
         history=[{"role": m["role"], "content": m["content"]} for m in session["history"]],
         question_context=ctx,
         diagram_elements=session.get("diagram_elements") or [],
+        expires_at=expires_at.isoformat() if expires_at else None,
     )
 
 

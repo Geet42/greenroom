@@ -8,7 +8,7 @@ Session-level access controls:
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
@@ -17,6 +17,7 @@ from services.supabase_client import get_supabase
 
 MAX_ACTIVE_SESSIONS = int(os.environ.get("MAX_ACTIVE_SESSIONS", "3"))
 SESSION_IDLE_TIMEOUT_MINUTES = int(os.environ.get("SESSION_IDLE_TIMEOUT_MINUTES", "30"))
+SESSION_MAX_DURATION_MINUTES = int(os.environ.get("SESSION_MAX_DURATION_MINUTES", "60"))
 
 
 def check_ownership(session: dict, user: AuthenticatedUser) -> None:
@@ -42,31 +43,58 @@ def check_session_limit(user_id: str) -> None:
         )
 
 
-MAX_CANDIDATE_TURNS = int(os.environ.get("MAX_CANDIDATE_TURNS", "15"))
-
-
-def is_turn_limit_reached(session: dict) -> bool:
-    """True when the candidate has sent MAX_CANDIDATE_TURNS messages in this session."""
-    turns = sum(1 for t in session["history"] if t["role"] == "candidate")
-    return turns >= MAX_CANDIDATE_TURNS
+def _parse_ts(value) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return value
 
 
 def check_idle_timeout(session: dict) -> None:
     """Raises 410 if the session has been idle longer than SESSION_IDLE_TIMEOUT_MINUTES."""
-    last_activity = session.get("last_activity_at")
+    last_activity = _parse_ts(session.get("last_activity_at"))
     if not last_activity:
         return
-    if isinstance(last_activity, str):
-        try:
-            last_activity = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
-        except ValueError:
-            return
     elapsed_minutes = (datetime.now(timezone.utc) - last_activity).total_seconds() / 60
     if elapsed_minutes > SESSION_IDLE_TIMEOUT_MINUTES:
         raise HTTPException(
             status_code=410,
             detail=(
                 f"This session has been idle for over {SESSION_IDLE_TIMEOUT_MINUTES} minutes "
+                f"and has expired. Start a new session to continue."
+            ),
+        )
+
+
+def session_expires_at(session: dict) -> datetime | None:
+    """Absolute wall-clock deadline for this session (created_at +
+    SESSION_MAX_DURATION_MINUTES), or None if created_at is unknown. Exposed
+    to the API responses (StartSessionResponse/ResumeSessionResponse) so the
+    frontend can drive a countdown off server truth instead of a client-side
+    timer started fresh on every page load/refresh."""
+    created_at = _parse_ts(session.get("created_at"))
+    if not created_at:
+        return None
+    return created_at + timedelta(minutes=SESSION_MAX_DURATION_MINUTES)
+
+
+def check_session_duration(session: dict) -> None:
+    """Raises 410 if the session has been open longer than
+    SESSION_MAX_DURATION_MINUTES in absolute wall-clock time — independent of
+    the idle timeout above, which only catches gaps between messages, not a
+    candidate who keeps a session alive with steady activity indefinitely."""
+    expires_at = session_expires_at(session)
+    if not expires_at:
+        return
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                f"This session has been open for over {SESSION_MAX_DURATION_MINUTES} minutes "
                 f"and has expired. Start a new session to continue."
             ),
         )
