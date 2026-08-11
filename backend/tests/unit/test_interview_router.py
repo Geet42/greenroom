@@ -62,6 +62,27 @@ def _seed_session(session_id: str, **overrides) -> dict:
     return session
 
 
+# --- _question_context (scale_metadata wiring) -----------------------------
+
+def test_question_context_includes_scale_metadata_when_present():
+    assigned = {
+        "id": "url-shortener", "title": "URL Shortener", "difficulty": "medium",
+        "prompt": "Design a URL shortener.", "constraints": [], "examples": [],
+        "tests": [], "scale_metadata": [{"label": "Writes/day", "value": "100M"}],
+    }
+    ctx = interview._question_context(assigned)
+    assert [t.model_dump() for t in ctx.scale_metadata] == [{"label": "Writes/day", "value": "100M"}]
+
+
+def test_question_context_defaults_scale_metadata_to_empty_list():
+    assigned = {
+        "id": "two-sum", "title": "Two Sum", "difficulty": "easy",
+        "prompt": "...", "constraints": [], "examples": [], "tests": [],
+    }
+    ctx = interview._question_context(assigned)
+    assert ctx.scale_metadata == []
+
+
 # --- POST /interview/start ------------------------------------------------
 
 def test_start_session_success(client):

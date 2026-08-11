@@ -43,6 +43,8 @@ export interface StartSessionResponse { session_id: string; track: string; quest
 
 export interface SendMessagePayload { session_id: string; message: string; code?: string; language?: string }
 
+export interface ScaleMetadataTag { label: string; value: string }
+
 export interface QuestionContext {
   id: string;
   title: string;
@@ -51,6 +53,7 @@ export interface QuestionContext {
   constraints: string[];
   examples: Record<string, unknown>[];
   is_stdio: boolean;
+  scale_metadata?: ScaleMetadataTag[];
 }
 
 export interface SendMessageResponse { question: string; question_context?: QuestionContext }

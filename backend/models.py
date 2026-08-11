@@ -66,6 +66,15 @@ class MessageRequest(BaseModel):
     language: Optional[str] = Field(default=None, max_length=50)
 
 
+class ScaleMetadataTag(BaseModel):
+    """One structured scale/metadata tag for a system-design question, e.g.
+    {"label": "Writes/day", "value": "100M (~1,200/sec)"} — a flexible
+    label/value pair rather than fixed numeric columns, since different
+    system-design problems care about very different metrics."""
+    label: str
+    value: str
+
+
 class QuestionContext(BaseModel):
     """Sent to the frontend once per session, when the coding problem is first assigned."""
     id: str
@@ -75,6 +84,7 @@ class QuestionContext(BaseModel):
     constraints: List[str]
     examples: List[dict]
     is_stdio: bool
+    scale_metadata: List[ScaleMetadataTag] = []
 
 
 class MessageResponse(BaseModel):

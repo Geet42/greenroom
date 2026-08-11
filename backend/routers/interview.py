@@ -62,6 +62,7 @@ def _question_context(assigned: dict) -> QuestionContext:
         constraints=assigned.get("constraints") or [],
         examples=assigned.get("examples") or [],
         is_stdio=is_stdio,
+        scale_metadata=assigned.get("scale_metadata") or [],
     )
 
 
