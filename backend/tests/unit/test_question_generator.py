@@ -95,3 +95,73 @@ async def test_select_or_generate_falls_back_to_bank_when_calls_missing():
 
     mock_pick.assert_called_once()
     assert question == bank_question
+
+
+# --- analyze_job_description (replaces hardcoded JD keyword matching) ------
+
+def test_analyze_job_description_empty_input_short_circuits():
+    with patch.object(question_generator, "_ask_llm") as mock_ask:
+        assert question_generator.analyze_job_description("") is None
+        assert question_generator.analyze_job_description("   ") is None
+    mock_ask.assert_not_called()
+
+
+def test_analyze_job_description_parses_seniority_and_topics():
+    raw = json.dumps({"seniority": "senior", "topics": ["distributed systems", "Kafka", "caching"]})
+    with patch.object(question_generator, "_ask_llm", return_value=raw):
+        result = question_generator.analyze_job_description("Senior backend engineer, Kafka, caching...")
+    assert result == {"seniority": "senior", "topics": ["distributed systems", "Kafka", "caching"]}
+
+
+def test_analyze_job_description_caps_topics_at_six_and_strips():
+    raw = json.dumps({"seniority": "mid", "topics": [f" topic{i} " for i in range(10)]})
+    with patch.object(question_generator, "_ask_llm", return_value=raw):
+        result = question_generator.analyze_job_description("some jd")
+    assert result["topics"] == [f"topic{i}" for i in range(6)]
+
+
+def test_analyze_job_description_invalid_seniority_normalized_to_none():
+    raw = json.dumps({"seniority": "expert-guru", "topics": ["React"]})
+    with patch.object(question_generator, "_ask_llm", return_value=raw):
+        result = question_generator.analyze_job_description("some jd")
+    assert result == {"seniority": None, "topics": ["React"]}
+
+
+def test_analyze_job_description_nothing_useful_returns_none():
+    raw = json.dumps({"seniority": "not-a-real-value", "topics": []})
+    with patch.object(question_generator, "_ask_llm", return_value=raw):
+        result = question_generator.analyze_job_description("some jd")
+    assert result is None
+
+
+def test_analyze_job_description_malformed_json_returns_none():
+    with patch.object(question_generator, "_ask_llm", return_value="not json"):
+        assert question_generator.analyze_job_description("some jd") is None
+
+
+def test_analyze_job_description_falls_back_on_primary_failure():
+    raw = json.dumps({"seniority": "junior", "topics": ["arrays"]})
+    with patch.object(question_generator, "_ask_llm", side_effect=RuntimeError("groq down")), \
+         patch.object(question_generator, "_ask_llm_fallback", return_value=raw) as mock_fallback:
+        result = question_generator.analyze_job_description("some jd")
+    mock_fallback.assert_called_once()
+    assert result == {"seniority": "junior", "topics": ["arrays"]}
+
+
+def test_analyze_job_description_returns_none_when_both_providers_fail():
+    with patch.object(question_generator, "_ask_llm", side_effect=RuntimeError("groq down")), \
+         patch.object(question_generator, "_ask_llm_fallback", side_effect=RuntimeError("fallback down")):
+        assert question_generator.analyze_job_description("some jd") is None
+
+
+# --- _jd_context_block -------------------------------------------------------
+
+def test_jd_context_block_empty_when_no_analysis():
+    assert question_generator._jd_context_block(None) == ""
+    assert question_generator._jd_context_block({"seniority": "senior", "topics": []}) == ""
+
+
+def test_jd_context_block_includes_topics():
+    block = question_generator._jd_context_block({"seniority": "senior", "topics": ["Kafka", "caching"]})
+    assert "Kafka" in block
+    assert "caching" in block

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -70,7 +71,17 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
     check_session_limit(user.id)
 
     session_id = str(uuid.uuid4())
-    greeting = await run_in_threadpool(llm.opening_message, req.track, req.role)
+    if req.job_description:
+        # Run concurrently — both are independent LLM calls, so analyzing the
+        # JD adds no extra latency to session start beyond whichever of the
+        # two is slower.
+        greeting, jd_analysis = await asyncio.gather(
+            run_in_threadpool(llm.opening_message, req.track, req.role),
+            run_in_threadpool(question_generator.analyze_job_description, req.job_description),
+        )
+    else:
+        greeting = await run_in_threadpool(llm.opening_message, req.track, req.role)
+        jd_analysis = None
 
     started_at = now()
     SESSIONS[session_id] = {
@@ -83,6 +94,7 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "last_activity_at": started_at,
         "created_at": started_at,
         "job_description": req.job_description or None,
+        "jd_analysis": jd_analysis,
         "status": "active",
         "diagram_elements": [],
         "asked_question_ids": set(),
@@ -168,17 +180,22 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
 
         if is_first_reply:
             session["candidate_intro"] = req.message
+            jd_analysis = session.get("jd_analysis")
+            jd_seniority = (jd_analysis or {}).get("seniority")
+            jd_topics = (jd_analysis or {}).get("topics")
             if session["track"] == "technical":
                 session["assigned_question"] = await question_generator.select_or_generate_question(
-                    session["role"], candidate_intro=req.message,
+                    session["role"], candidate_intro=req.message, jd_analysis=jd_analysis,
                 )
             elif session["track"] == "system-design":
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_system_design_question, None, session["role"]
+                    question_bank.pick_system_design_question, None, session["role"],
+                    jd_seniority=jd_seniority, jd_topics=jd_topics,
                 )
             else:
                 session["assigned_question"] = await run_in_threadpool(
-                    question_bank.pick_behavioral_question, None, None, session["role"]
+                    question_bank.pick_behavioral_question, None, None, session["role"],
+                    jd_seniority=jd_seniority, jd_topics=jd_topics,
                 )
             if session["assigned_question"]:
                 session.setdefault("asked_question_ids", set()).add(session["assigned_question"]["id"])
@@ -187,6 +204,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
             exclude_ids = session.get("asked_question_ids") or set()
             new_question = await question_generator.select_or_generate_question(
                 session["role"], candidate_intro=session.get("candidate_intro", ""), exclude_ids=exclude_ids,
+                jd_analysis=session.get("jd_analysis"),
             )
             if new_question:
                 session["assigned_question"] = new_question

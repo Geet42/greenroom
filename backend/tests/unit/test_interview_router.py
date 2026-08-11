@@ -81,6 +81,29 @@ def test_start_session_rejects_invalid_track(client):
     assert resp.status_code == 422
 
 
+def test_start_session_analyzes_job_description_when_provided(client):
+    jd_result = {"seniority": "senior", "topics": ["Kafka", "distributed systems"]}
+    with patch.object(interview.llm, "opening_message", return_value="Hi."), \
+         patch.object(interview.question_generator, "analyze_job_description", return_value=jd_result) as mock_jd:
+        resp = client.post("/api/interview/start", json={
+            "track": "behavioral", "job_description": "Senior backend engineer, Kafka, distributed systems.",
+        })
+    assert resp.status_code == 200
+    mock_jd.assert_called_once_with("Senior backend engineer, Kafka, distributed systems.")
+    session = session_store.SESSIONS[resp.json()["session_id"]]
+    assert session["jd_analysis"] == jd_result
+
+
+def test_start_session_skips_jd_analysis_when_no_job_description(client):
+    with patch.object(interview.llm, "opening_message", return_value="Hi."), \
+         patch.object(interview.question_generator, "analyze_job_description") as mock_jd:
+        resp = client.post("/api/interview/start", json={"track": "behavioral"})
+    assert resp.status_code == 200
+    mock_jd.assert_not_called()
+    session = session_store.SESSIONS[resp.json()["session_id"]]
+    assert session["jd_analysis"] is None
+
+
 # --- POST /interview/message ------------------------------------------------
 
 def test_message_session_not_found(client):

@@ -61,7 +61,7 @@ Candidate's introduction (use this to pick something that actually fits their ba
 don't default to the same generic crowd-pleaser every time; choose what's genuinely the best \
 match for THIS candidate, including their stated interests, stack, and experience level):
 \"\"\"{candidate_intro}\"\"\"
-
+{jd_context}
 Below is the catalog of problems already available (id | topic | difficulty | title), in \
 randomized order. These are pre-verified to run correctly in Python, JavaScript, Java, AND C++ — \
 generated problems only reliably support Python/JavaScript (Java/C++ execution for a generated \
@@ -110,6 +110,82 @@ You are given a coding problem. Write a complete, correct Python 3 function defi
 {function_name} that solves it — just the function, not a full program, no reading from stdin. \
 Write your own independent implementation — do not assume any particular algorithm. Reply with \
 ONLY the Python code, no markdown fences, no explanation."""
+
+# ── Job-description analysis ──────────────────────────────────────────────
+#
+# Replaces hardcoded JD keyword matching: instead of regexing the JD for a
+# fixed word list, one LLM call (per session, at session start — see
+# routers/interview.py) extracts a seniority signal and a handful of
+# topics/keywords, which then bias BOTH selection paths — the LLM catalog
+# decision above (via jd_context) and the plain weighted-random picker in
+# question_bank.pick_question/pick_system_design_question/pick_behavioral_question
+# (via jd_seniority/jd_topics, see question_bank._weighted_choice).
+
+_JD_ANALYSIS_SYSTEM = """\
+You read a job description and extract two signals for picking interview questions. Reply ONLY \
+as valid JSON, no markdown fences, no explanation:
+
+{
+  "seniority": "junior" | "mid" | "senior",
+  "topics": ["<up to 6 short topics/keywords a technical interviewer for THIS role would want to \
+probe, e.g. \\"distributed systems\\", \\"React\\", \\"SQL\\", \\"caching\\", \\"system design\\", \
+\\"algorithms\\", \\"concurrency\\" — derived from the actual responsibilities/stack mentioned, \
+not generic filler>"]
+}
+
+"seniority": infer from years-of-experience language, title, and scope of responsibility \
+described — default to "mid" if genuinely ambiguous. "topics": prefer specific, concrete terms \
+over vague ones (e.g. "Kafka" or "message queues" over "backend stuff")."""
+
+
+def analyze_job_description(job_description: str) -> dict | None:
+    """Returns {"seniority": "junior"|"mid"|"senior", "topics": [...]} extracted
+    from free-text JD content, or None on any failure (callers should treat
+    that exactly like "no JD analysis available" — every consumer already
+    falls back to role-string inference and no topic bias when this is None).
+    Synchronous — call via asyncio.to_thread from async code."""
+    if not job_description or not job_description.strip():
+        return None
+    try:
+        raw = _ask_llm(_JD_ANALYSIS_SYSTEM, job_description.strip(), 0.2, 300)
+    except Exception as exc:
+        log.warning("question_generator.jd_analysis_primary_failed", error=str(exc))
+        try:
+            raw = _ask_llm_fallback(_JD_ANALYSIS_SYSTEM, job_description.strip(), 0.2, 300)
+        except Exception as exc2:
+            log.error("question_generator.jd_analysis_failed", error=str(exc2))
+            return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("question_generator.jd_analysis_parse_failed", error=str(exc))
+        return None
+
+    seniority = parsed.get("seniority")
+    if seniority not in ("junior", "mid", "senior"):
+        seniority = None
+    topics = parsed.get("topics")
+    if not isinstance(topics, list):
+        topics = []
+    topics = [t.strip() for t in topics if isinstance(t, str) and t.strip()][:6]
+
+    if not seniority and not topics:
+        return None
+    return {"seniority": seniority, "topics": topics}
+
+
+def _jd_context_block(jd_analysis: dict | None) -> str:
+    """Formats jd_analysis into a prompt fragment for _DECIDE_OR_GENERATE_SYSTEM
+    — empty string (no extra section) when there's nothing to add."""
+    if not jd_analysis or not jd_analysis.get("topics"):
+        return ""
+    topics = ", ".join(jd_analysis["topics"])
+    return (
+        f'\nThe job description this candidate is interviewing for emphasizes: {topics}. '
+        f"All else equal, prefer a problem touching one of these over an unrelated one — but "
+        f"the candidate's own background above still comes first if they conflict.\n"
+    )
 
 _MAX_CATALOG_ENTRIES = 200
 _TOPIC_PERSIST_CAP = 25  # don't keep stacking generated problems onto an already-deep topic
@@ -217,6 +293,7 @@ def _has_real_signal(candidate_intro: str) -> bool:
 
 async def select_or_generate_question(
     role: str, candidate_intro: str = "", exclude_ids: set[str] | None = None,
+    jd_analysis: dict | None = None,
 ) -> dict | None:
     """Main entry point. Returns a question dict (bank-shaped) or None if even
     the existing-bank fallback has nothing for this track — callers should
@@ -228,12 +305,19 @@ async def select_or_generate_question(
     pass this whenever you have it (i.e. call this after the candidate's first
     reply, not at session start before they've said anything).
 
+    jd_analysis: output of analyze_job_description() (or None) — biases both
+    the LLM catalog decision (via jd_context in the prompt) and the plain
+    weighted-random fallback picker (via jd_seniority/jd_topics).
+
     exclude_ids: questions already assigned earlier in this session (see
     "Next question" in routers/interview.py) — skipped everywhere so
     requesting another problem can't just re-serve the one just finished."""
     exclude_ids = exclude_ids or set()
+    jd_seniority = (jd_analysis or {}).get("seniority")
+    jd_topics = (jd_analysis or {}).get("topics")
     fallback_pick = lambda: question_bank.pick_question(  # noqa: E731
         "technical", language="python", exclude_ids=exclude_ids, role=role,
+        jd_seniority=jd_seniority, jd_topics=jd_topics,
     )
 
     all_questions = await asyncio.to_thread(question_bank._all_questions)
@@ -251,10 +335,11 @@ async def select_or_generate_question(
 
     catalog_pool = [q for q in technical if q["id"] not in _EXCLUDED_FROM_AUTO_PICK]
     catalog = _build_catalog(catalog_pool)
-    difficulty_options, difficulty_note = _DIFFICULTY_GUIDANCE[question_bank.infer_seniority(role)]
+    difficulty_options, difficulty_note = _DIFFICULTY_GUIDANCE[jd_seniority or question_bank.infer_seniority(role)]
     system = _DECIDE_OR_GENERATE_SYSTEM.format(
         role=role, candidate_intro=candidate_intro or "(not provided)", catalog=catalog,
         difficulty_options=difficulty_options, difficulty_note=difficulty_note,
+        jd_context=_jd_context_block(jd_analysis),
     )
     user_msg = "Choose now."
 
