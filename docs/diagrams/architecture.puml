@@ -1,4 +1,8 @@
 @startuml architecture
+' Regenerate architecture.png after editing this file, e.g.:
+'   plantuml docs/diagrams/architecture.puml
+' (or the PlantUML VS Code extension / any PlantUML renderer) — the PNG is
+' committed separately and does not update automatically.
 title Greenroom — System Architecture
 
 skinparam backgroundColor white
@@ -56,9 +60,7 @@ package "Azure Container Apps  ·  Private VNet  ·  OIDC CI/CD" #F2FAF3 {
 
   package "Backend API  ·  FastAPI  ·  2 replicas" #DDF3E2 {
     component "Frontend\nReact + Vite + Nginx" as frontend #D7E9FA
-    component "Auth Guard\nJWT + dual ownership check" as authguard
-    component "Session Guard\nrate · cap (3) · idle 30 min -> 410" as sessionguard
-    component "Session Cache\nasyncio.Lock per session\n⚠ in-memory: per-replica only" as sessioncache
+    component "API Gateway\nJWT validation · session ownership\n· rate/idle limits (in-memory, per-replica)" as apigateway
 
     together {
       component "LLM Orchestrator\nGroq -> Ollama fallback\nlive conversation" as llmorchestrator
@@ -73,7 +75,7 @@ package "Azure Container Apps  ·  Private VNet  ·  OIDC CI/CD" #F2FAF3 {
       component "Ad-hoc Harness Generator\ninterviewer-invented problems" as adhocharness
     }
 
-    component "Analytics / Telemetry\nevent ingestion + GET /stats" as analytics
+    component "Analytics / Telemetry\nevent ingestion" as analytics
   }
 }
 
@@ -92,13 +94,6 @@ package "Code Execution (external, no SLA)" #FAD9DC {
   component "Judge0 RapidAPI\noptional key" as judge0rapid
 }
 
-note bottom of codeexec
-  Local subprocess fallback runs
-  **inside the backend's own
-  container** (Python/Node/C++
-  only — no isolation, no Java)
-end note
-
 ' ── invisible edges: pin left-to-right package order so the layout
 ' ── engine can't flip Code Execution/LLM Providers to the wrong side
 supadb -[hidden]right-> ghactions
@@ -108,31 +103,29 @@ groq -[hidden]right-> edgetts
 edgetts -[hidden]right-> judge0public
 
 ' ── flows ──────────────────────────────────────────────────────────
-candidate -down-> frontend : ① HTTPS
-frontend -up-> supaauth : ② PKCE · anon key
-frontend -down-> authguard : ③ /api/* · Bearer JWT
-authguard -up-> supaauth : ④ validate JWT
-authguard -up-> supadb : ④ svc-role key
-authguard -down-> sessionguard
-sessionguard -right-> sessioncache
+candidate -down-> frontend : HTTPS
+frontend -up-> supaauth : PKCE login
+frontend -down-> apigateway : /api/* · Bearer JWT
+apigateway -up-> supaauth : validate JWT
+apigateway -up-> supadb : session/ownership reads · svc-role key
 
-sessionguard -down-> llmorchestrator
-sessionguard -down-> ttsservice
-sessionguard -down-> codeexec
+apigateway -down-> llmorchestrator
+apigateway -down-> ttsservice
+apigateway -down-> codeexec
 
 llmorchestrator -right-> evalengine : end
 llmorchestrator -down-> guardrail : draft output
 guardrail -up-> llmorchestrator : regenerate on leak
 
-llmorchestrator -right-> groq : ⑤ primary call
-evalengine -right-> azureopenai : ⑤ eval-only call
+llmorchestrator -right-> groq : primary call
+evalengine -right-> azureopenai : eval-only call
 groq -down-> ollama : fallback
 
 ttsservice -right-> edgetts : synthesize
 
 codeexec -down-> harnessgen : get harness
 codeexec -down-> adhocharness : get harness
-codeexec -right-> judge0public : ⑥ execute
+codeexec -right-> judge0public : execute
 judge0public -down-> judge0rapid : fallback
 
 analytics -up-> supadb : background write

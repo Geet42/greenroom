@@ -32,6 +32,7 @@ import re
 import uuid
 
 from services import piston, question_bank
+from services.logger import log
 
 _DIFFICULTY_GUIDANCE = {
     "junior": (
@@ -259,10 +260,12 @@ async def select_or_generate_question(
 
     try:
         raw = await asyncio.to_thread(_ask_llm, system, user_msg, 1.0, 1200)
-    except Exception:
+    except Exception as exc:
+        log.warning("question_generator.primary_llm_failed", role=role, error=str(exc))
         try:
             raw = await asyncio.to_thread(_ask_llm_fallback, system, user_msg, 1.0, 1200)
-        except Exception:
+        except Exception as exc2:
+            log.error("question_generator.fallback_llm_failed", role=role, error=str(exc2))
             return fallback_pick()
 
     try:
@@ -357,7 +360,8 @@ async def _verify_and_persist(
     try:
         system = _SECOND_SOLUTION_SYSTEM.format(function_name=function_name)
         solution_b = await asyncio.to_thread(_ask_llm, system, prompt, 0.5, 800)
-    except Exception:
+    except Exception as exc:
+        log.warning("question_generator.second_solution_failed", question_id=question.get("id"), error=str(exc))
         return
 
     outputs_b = await _run_solution(solution_b, calls)
@@ -389,5 +393,5 @@ def _persist_question(question: dict) -> None:
             "examples": question.get("examples") or [],
         }).execute()
         question_bank.refresh()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.error("question_generator.persist_failed", question_id=question.get("id"), error=str(exc))

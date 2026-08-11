@@ -183,6 +183,38 @@ on Azure Container Apps (D4 plan) which supports privileged mode — but that co
 
 ---
 
+## Observability — metrics, logs, live tail
+
+### Local dev (Docker Compose)
+
+`docker-compose.yml` (repo root) brings up the backend alongside Prometheus, Grafana, Loki, and Promtail:
+
+```bash
+cp backend/.env.example backend/.env   # fill in real keys first — required, compose will fail to start without this file
+docker compose up -d --build
+```
+
+- **Grafana**: http://localhost:3000 (login `admin` / `admin`, set via `GF_SECURITY_ADMIN_PASSWORD` in `docker-compose.yml` — change this before exposing the stack beyond your own machine) → dashboard **"Greenroom Backend"** is auto-provisioned with request rate, p95 latency, error rate, and two live-tailing log panels (all logs, and errors only).
+- **Prometheus**: http://localhost:9090 — scrapes `backend:8000/metrics` every 15s (config: `infra/prometheus/prometheus.yml`).
+- **Loki**: receives logs via Promtail, which discovers containers through the Docker API (`infra/promtail/promtail-config.yml`) and ships their stdout — no extra instrumentation needed per-service.
+- To watch raw logs in a terminal instead: `docker compose logs -f backend`.
+
+This stack is **local-only** — it does not run against the live Azure deployment, and nothing here needs to be deployed for the app itself to work. It's for developers debugging locally.
+
+### Live deployed app
+
+The backend already logs one structured JSON line per event/request to stdout (`backend/services/logger.py`, `backend/main.py`) and exposes `GET /metrics` in Prometheus format — no extra setup needed to view them on Azure:
+
+```bash
+az containerapp logs show --name greenroom-backend --resource-group <your-rg> --follow
+```
+
+Or in the portal: **Container Apps → greenroom-backend → Monitoring → Log stream**.
+
+There is no Loki/Grafana wired up against the live deployment — the compose stack above is local dev only. If you want the same live-log-in-Grafana view for the deployed app, either point a hosted Grafana at Azure Monitor/Log Analytics (see `infra/monitoring.bicep` — drafted but not yet deployed; deploy via `infra/deploy-monitoring.sh` once its alert rules are updated to match the current Judge0 setup, not the retired Piston/Wandbox split), or ship container logs to a hosted Loki instance.
+
+---
+
 ## Estimated monthly cost
 
 | Service | Plan | Cost |

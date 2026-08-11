@@ -5,6 +5,8 @@ import threading
 
 import edge_tts
 
+from services.logger import log
+
 DEFAULT_VOICE = "en-US-AriaNeural"
 
 # Repeat requests for the same (text, voice) pair — e.g. the candidate
@@ -66,7 +68,8 @@ async def get_or_synthesize(text: str, voice: str = DEFAULT_VOICE) -> str:
     try:
         await synthesize_to_file(text, tmp_path, voice)
         os.replace(tmp_path, path)  # atomic — no reader ever sees a partial file
-    except Exception:
+    except Exception as exc:
+        log.error("tts.synthesize_failed", voice=voice, error=str(exc))
         try:
             os.unlink(tmp_path)
         except OSError:

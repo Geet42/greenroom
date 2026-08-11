@@ -12,6 +12,8 @@ import asyncio
 import json
 import re
 
+from services.logger import log
+
 # ── Step 1: LLM generates test-case data only ────────────────────────────────
 
 _CASES_SYSTEM = """\
@@ -73,20 +75,22 @@ def _generate_cases(problem: str) -> list[dict] | None:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
+            log.warning("test_runner.primary_llm_failed", error=str(exc))
             # gpt-oss:20b (the fallback model) is a reasoning model that burns
             # tokens on hidden "reasoning" content before writing the actual
             # reply — 600 was consistently exhausted by reasoning alone,
             # leaving empty content. 1200 was verified empirically sufficient.
             raw = _strip_fences(_fallback_chat(msgs, max_tokens=1200, temperature=0.1))
         else:
+            log.error("test_runner.cases_generation_failed", error=str(exc))
             return None
 
     try:
         cases = json.loads(raw)
         if isinstance(cases, list) and cases:
             return cases
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        log.warning("test_runner.cases_parse_failed", error=str(exc))
     return None
 
 

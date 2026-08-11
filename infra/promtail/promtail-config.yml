@@ -1,0 +1,35 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Container name (Docker prefixes it with "/") -> "container" label.
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      # Compose service name (e.g. "backend") -> "service" label, so Grafana
+      # queries can filter with {service="backend"} regardless of container naming.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "service"
+    pipeline_stages:
+      # backend emits one JSON object per line (services/logger.py). Parse it
+      # so "level" becomes a queryable stream label; "event" stays in the
+      # parsed body (queryable via `| json` in LogQL) rather than a label —
+      # it has far too many distinct values to be a label without blowing up
+      # Loki's stream cardinality.
+      - json:
+          expressions:
+            level: level
+      - labels:
+          level:

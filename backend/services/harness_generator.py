@@ -28,6 +28,7 @@ import re
 import httpx
 
 from services import piston
+from services.logger import log
 
 _BOUNDARY = "###---{}---###"
 
@@ -186,7 +187,8 @@ def _generate(language: str, question: dict, corrective_feedback: str | None = N
         llm = _make_llm(temperature=0.2, max_tokens=3000)
         result = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
         raw = result.content
-    except Exception:
+    except Exception as exc:
+        log.warning("harness_generator.primary_llm_failed", language=language, error=str(exc))
         try:
             resp = httpx.post(
                 f"{os.environ['FALLBACK_BASE_URL']}/chat/completions",
@@ -200,7 +202,8 @@ def _generate(language: str, question: dict, corrective_feedback: str | None = N
             )
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"]
-        except Exception:
+        except Exception as exc2:
+            log.error("harness_generator.fallback_llm_failed", language=language, error=str(exc2))
             return None
 
     boilerplate = _section(raw, b_marker, [s_marker, h_marker])
@@ -370,8 +373,8 @@ def _persist_question_field(question_id: str, field: str, language: str, data) -
         existing[language] = data
         sb.table("questions").update({field: existing}).eq("id", question_id).execute()
         question_bank.refresh()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.error("harness_generator.persist_failed", question_id=question_id, field=field, error=str(exc))
 
 
 def _persist(question_id: str, language: str, harness_data: dict) -> None:
@@ -464,13 +467,15 @@ def _generate_signature(language: str, method_name: str, question: dict) -> str 
     try:
         llm = _make_llm(temperature=0.2, max_tokens=400)
         raw = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content
-    except Exception:
+    except Exception as exc:
+        log.warning("harness_generator.signature_primary_llm_failed", language=language, error=str(exc))
         try:
             raw = _fallback_chat(
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 max_tokens=400, temperature=0.2,
             )
-        except Exception:
+        except Exception as exc2:
+            log.error("harness_generator.signature_fallback_llm_failed", language=language, error=str(exc2))
             return None
 
     code = raw.strip().strip("`").strip()

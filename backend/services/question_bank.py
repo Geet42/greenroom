@@ -19,6 +19,7 @@ import random
 import re
 import threading
 
+from services.logger import log
 from services.supabase_client import get_supabase
 
 _CLASS_METHOD_PATTERN = re.compile(r"^(\w+)\(\)\.(\w+)$")
@@ -107,7 +108,8 @@ def _load_from_supabase() -> list[dict] | None:
     try:
         resp = sb.table("questions").select("*").execute()
         return resp.data or None
-    except Exception:
+    except Exception as exc:
+        log.error("question_bank.supabase_load_failed", error=str(exc))
         return None
 
 
