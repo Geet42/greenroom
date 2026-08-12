@@ -471,7 +471,7 @@ def _self_critique(track: str, role: str, transcript: str, draft: dict) -> dict:
             f"Transcript:\n{transcript or 'The candidate did not answer any questions.'}\n\n"
             f"Draft evaluation to review:\n{json.dumps(draft)}"
         )
-        llm = _make_azure_llm(temperature=0.2, max_tokens=700)
+        llm = _make_azure_llm(temperature=0.2, max_tokens=4000)
         llm_json = llm.bind(response_format={"type": "json_object"})
         parser = JsonOutputParser(pydantic_object=EvaluationResult)
         chain = llm_json | parser
@@ -526,7 +526,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
     parser = JsonOutputParser(pydantic_object=EvaluationResult)
 
     try:
-        llm = _make_azure_llm(temperature=0.3, max_tokens=700)
+        llm = _make_azure_llm(temperature=0.3, max_tokens=4000)
         llm_json = llm.bind(response_format={"type": "json_object"})
         chain = llm_json | parser
         result = chain.invoke(lc_messages)
@@ -539,14 +539,18 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-            raw = _fallback_chat(
-                [
-                    {"role": "system", "content": system_content},
-                    {"role": "user",   "content": transcript or "The candidate did not answer any questions."},
-                ],
-                max_tokens=700, temperature=0.3, json_mode=True,
-            )
+            # Broad except deliberately: _fallback_chat itself can raise
+            # (unconfigured, unreachable, timeout, 5xx, bad response shape) —
+            # any of those must still fall through to the last-resort default
+            # below rather than escape and 500 the end-of-interview request.
             try:
+                raw = _fallback_chat(
+                    [
+                        {"role": "system", "content": system_content},
+                        {"role": "user",   "content": transcript or "The candidate did not answer any questions."},
+                    ],
+                    max_tokens=4000, temperature=0.3, json_mode=True,
+                )
                 # Some fallback providers wrap JSON in markdown fences even
                 # with response_format=json_object set — strip before parsing.
                 cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
@@ -555,8 +559,8 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
                 _reconcile_score(result)
                 result = _validate_eval_result(result)
                 return _self_critique(track, role, transcript, result)
-            except (json.JSONDecodeError, ValueError, TypeError):
-                pass
+            except Exception as fallback_exc:
+                log.warning("llm.evaluate_session.fallback_failed", track=track, error=str(fallback_exc))
         # Last-resort default
         return {
             "overall_score": 5,
@@ -662,7 +666,7 @@ def evaluate_diagram(
     }
 
     try:
-        llm_client = _make_azure_llm(temperature=0.1, max_tokens=400)
+        llm_client = _make_azure_llm(temperature=0.1, max_tokens=2000)
         llm_json = llm_client.bind(response_format={"type": "json_object"})
         chain = llm_json | JsonOutputParser()
         result = chain.invoke([HumanMessage(content=prompt)])
