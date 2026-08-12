@@ -1,23 +1,37 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockNavigate, mockSpeak, mockStopSpeech, mockPauseSpeech, mockResumeSpeech, mockStart, mockStop, mockReset } =
-  vi.hoisted(() => ({
-    mockNavigate: vi.fn(),
-    mockSpeak: vi.fn(),
-    mockStopSpeech: vi.fn(),
-    mockPauseSpeech: vi.fn(),
-    mockResumeSpeech: vi.fn(),
-    mockStart: vi.fn(),
-    mockStop: vi.fn(),
-    mockReset: vi.fn(),
-  }));
+const {
+  mockNavigate, mockSpeak, mockStopSpeech, mockPauseSpeech, mockResumeSpeech, mockStart, mockStop, mockReset,
+  MockApiError,
+} =
+  vi.hoisted(() => {
+    class MockApiError extends Error {
+      constructor(status, message) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
+      }
+    }
+    return {
+      mockNavigate: vi.fn(),
+      mockSpeak: vi.fn(),
+      mockStopSpeech: vi.fn(),
+      mockPauseSpeech: vi.fn(),
+      mockResumeSpeech: vi.fn(),
+      mockStart: vi.fn(),
+      mockStop: vi.fn(),
+      mockReset: vi.fn(),
+      MockApiError,
+    };
+  });
 
 vi.mock("react-router-dom", () => ({
   useNavigate: () => mockNavigate,
 }));
 
 vi.mock("../lib/api", () => ({
+  ApiError: MockApiError,
   api: {
     startSession: vi.fn(),
     resumeSession: vi.fn(),
@@ -54,7 +68,7 @@ vi.mock("../hooks/useSpeechSynthesis", () => ({
   }),
 }));
 
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
 import { useInterviewSession } from "../hooks/useInterviewSession";
 
@@ -129,14 +143,14 @@ describe("useInterviewSession — init", () => {
   });
 
   it("redirects to /login when starting a session returns 401/403", async () => {
-    api.startSession.mockRejectedValue(new Error("API error 401: unauthorized"));
+    api.startSession.mockRejectedValue(new ApiError(401, "API error 401: unauthorized"));
     renderHook(() => useInterviewSession({ track: "behavioral" }));
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/login", { replace: true }));
   });
 
   it("shows a friendly message when starting a session returns 429 (too many active sessions)", async () => {
-    api.startSession.mockRejectedValue(new Error("API error 429: too many requests"));
+    api.startSession.mockRejectedValue(new ApiError(429, "API error 429: too many requests"));
     const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
 
     await waitFor(() =>
@@ -145,17 +159,17 @@ describe("useInterviewSession — init", () => {
   });
 });
 
-describe("useInterviewSession — handleSend", () => {
-  async function setUpStartedSession() {
-    api.startSession.mockResolvedValue({ session_id: "sess-1", track: "behavioral", question: "Q1" });
-    const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
-    await waitFor(() => expect(result.current.sessionId).toBe("sess-1"));
-    return result;
-  }
+async function setUpStartedSession() {
+  api.startSession.mockResolvedValue({ session_id: "sess-1", track: "behavioral", question: "Q1" });
+  const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
+  await waitFor(() => expect(result.current.sessionId).toBe("sess-1"));
+  return result;
+}
 
+describe("useInterviewSession — handleSend", () => {
   it("sends the candidate's answer and appends the interviewer's reply", async () => {
     const result = await setUpStartedSession();
-    api.sendMessage.mockResolvedValue({ question: "Tell me more.", done: false });
+    api.sendMessage.mockResolvedValue({ question: "Tell me more." });
 
     act(() => result.current.setAnswerText("I led a project."));
     await act(async () => {
@@ -190,6 +204,81 @@ describe("useInterviewSession — handleSend", () => {
     });
 
     expect(result.current.messages.at(-1).text).toMatch(/lost connection/i);
+  });
+});
+
+describe("useInterviewSession — session expiry / countdown", () => {
+  it("computes remainingSeconds from the server-provided expires_at on start", async () => {
+    const expiresAt = new Date(Date.now() + 120_000).toISOString();
+    api.startSession.mockResolvedValue({
+      session_id: "sess-1", track: "behavioral", question: "Q1", expires_at: expiresAt,
+    });
+    const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
+
+    await waitFor(() => expect(result.current.sessionId).toBe("sess-1"));
+    await waitFor(() => expect(result.current.remainingSeconds).not.toBeNull());
+    // Allow a little slack for time elapsed while the test itself ran.
+    expect(result.current.remainingSeconds).toBeGreaterThan(110);
+    expect(result.current.remainingSeconds).toBeLessThanOrEqual(120);
+  });
+
+  it("locks the session and auto-fetches the report once expires_at has passed", async () => {
+    const expiresAt = new Date(Date.now() - 1000).toISOString();
+    api.startSession.mockResolvedValue({
+      session_id: "sess-1", track: "behavioral", question: "Q1", expires_at: expiresAt,
+    });
+    api.endSession.mockResolvedValue({});
+    const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
+
+    await waitFor(() => expect(result.current.sessionLocked).toBe(true));
+    expect(result.current.lockMessage).toMatch(/time is up/i);
+    await waitFor(() => expect(api.endSession).toHaveBeenCalledWith({ session_id: "sess-1" }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/results/sess-1"));
+  });
+
+  it("locks the session and fetches the report when sendMessage returns 410 (expired mid-session)", async () => {
+    const result = await setUpStartedSession();
+    api.sendMessage.mockRejectedValue(new ApiError(410, "API error 410: session expired"));
+    api.endSession.mockResolvedValue({});
+    act(() => result.current.setAnswerText("one more answer"));
+
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    expect(result.current.sessionLocked).toBe(true);
+    await waitFor(() => expect(api.endSession).toHaveBeenCalledWith({ session_id: "sess-1" }));
+  });
+
+  it("immediately locks and ends a resumed session whose deadline already passed", async () => {
+    api.resumeSession.mockResolvedValue({
+      session_id: "sess-1",
+      track: "behavioral",
+      history: [{ role: "interviewer", content: "Hi." }],
+      diagram_elements: [],
+      expires_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    api.endSession.mockResolvedValue({});
+    renderHook(() => useInterviewSession({ track: "behavioral", resumeSessionId: "sess-1" }));
+
+    await waitFor(() => expect(api.endSession).toHaveBeenCalledWith({ session_id: "sess-1" }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/results/sess-1"));
+  });
+
+  it("blocks sending once the session is locked", async () => {
+    const expiresAt = new Date(Date.now() - 1000).toISOString();
+    api.startSession.mockResolvedValue({
+      session_id: "sess-1", track: "behavioral", question: "Q1", expires_at: expiresAt,
+    });
+    api.endSession.mockResolvedValue({});
+    const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
+
+    await waitFor(() => expect(result.current.sessionLocked).toBe(true));
+    act(() => result.current.setAnswerText("too late"));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -244,7 +333,7 @@ describe("useInterviewSession — toggleMute", () => {
 
   it("speaks the latest response fresh (instead of resuming) if a new message arrived while muted", async () => {
     api.startSession.mockResolvedValue({ session_id: "sess-1", track: "behavioral", question: "Opening question." });
-    api.sendMessage.mockResolvedValue({ question: "Follow-up while muted.", done: false });
+    api.sendMessage.mockResolvedValue({ question: "Follow-up while muted." });
     const { result } = renderHook(() => useInterviewSession({ track: "behavioral" }));
     await waitFor(() => expect(result.current.sessionId).toBe("sess-1"));
 

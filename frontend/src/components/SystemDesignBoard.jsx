@@ -1,12 +1,14 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Excalidraw } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
+import { buildSystemDesignLibraryItems } from "../lib/systemDesignShapes";
 
 const AUTOSAVE_DEBOUNCE_MS = 2000;
 
 const SystemDesignBoard = forwardRef(function SystemDesignBoard({ initialElements, onSave }, ref) {
   const [api, setApi] = useState(null);
   const restoredRef = useRef(false);
+  const libraryLoadedRef = useRef(false);
   const saveTimerRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
@@ -20,6 +22,16 @@ const SystemDesignBoard = forwardRef(function SystemDesignBoard({ initialElement
     restoredRef.current = true;
     api.updateScene({ elements: initialElements });
   }, [api, initialElements]);
+
+  // Loads recognizable system-design icon shapes (database, cache, load
+  // balancer, queue, CDN, API service) into the library sidebar, so
+  // candidates can drag a labeled component onto the board instead of
+  // building everything from generic rectangles.
+  useEffect(() => {
+    if (!api || libraryLoadedRef.current) return;
+    libraryLoadedRef.current = true;
+    api.updateLibrary({ libraryItems: buildSystemDesignLibraryItems(), openLibraryMenu: true });
+  }, [api]);
 
   const handleChange = useCallback((elements) => {
     if (!onSave) return;

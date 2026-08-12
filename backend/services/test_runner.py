@@ -12,6 +12,9 @@ import asyncio
 import json
 import re
 
+from services import singleflight
+from services.logger import log
+
 # ── Step 1: LLM generates test-case data only ────────────────────────────────
 
 _CASES_SYSTEM = """\
@@ -73,20 +76,22 @@ def _generate_cases(problem: str) -> list[dict] | None:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
+            log.warning("test_runner.primary_llm_failed", error=str(exc))
             # gpt-oss:20b (the fallback model) is a reasoning model that burns
             # tokens on hidden "reasoning" content before writing the actual
             # reply — 600 was consistently exhausted by reasoning alone,
             # leaving empty content. 1200 was verified empirically sufficient.
             raw = _strip_fences(_fallback_chat(msgs, max_tokens=1200, temperature=0.1))
         else:
+            log.error("test_runner.cases_generation_failed", error=str(exc))
             return None
 
     try:
         cases = json.loads(raw)
         if isinstance(cases, list) and cases:
             return cases
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        log.warning("test_runner.cases_parse_failed", error=str(exc))
     return None
 
 
@@ -254,12 +259,19 @@ _hidden.forEach((_tc, _i) => {{
 # these same cases via services.adhoc_harness) drift out of sync with what
 # Python/JS are actually testing.
 _CASES_CACHE: dict[str, list[dict] | None] = {}
+_cases_locks = singleflight.KeyedLocks()
 
 
 def get_or_generate_cases(problem: str) -> list[dict] | None:
-    if problem not in _CASES_CACHE:
-        _CASES_CACHE[problem] = _generate_cases(problem)
-    return _CASES_CACHE[problem]
+    if problem in _CASES_CACHE:
+        return _CASES_CACHE[problem]
+    # Coalesces concurrent misses for the same problem (e.g. two "Run Tests"
+    # clicks before the first LLM call returns) into a single LLM call —
+    # without this lock, both callers would independently generate cases.
+    with _cases_locks.get(problem):
+        if problem not in _CASES_CACHE:
+            _CASES_CACHE[problem] = _generate_cases(problem)
+        return _CASES_CACHE[problem]
 
 
 def generate_harness(language: str, source: str, history: list[dict], assigned_question: dict | None = None) -> str | None:

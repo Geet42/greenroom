@@ -17,9 +17,10 @@ from __future__ import annotations
 import hashlib
 import re
 
-from services import harness_generator
+from services import harness_generator, singleflight
 
 _cache: dict[tuple, dict | str | None] = {}
+_locks = singleflight.AsyncKeyedLocks()
 
 # Matches the function/method being called at the start of a "call" literal:
 # "canJump(nums=[2,3,1,1,4])" -> "canJump", or the constructor being invoked
@@ -60,25 +61,31 @@ async def get_or_generate(language: str, problem: str, cases: list[dict]) -> dic
     if key in _cache:
         return _cache[key]
 
-    question = {"title": "", "prompt": problem, "tests": cases, "function_name": method_name}
-
     import asyncio
-    feedback = None
-    result = None
-    for _attempt in range(harness_generator._GENERATION_ATTEMPTS):
-        spec = await asyncio.to_thread(harness_generator._generate, language, question, feedback)
-        if not spec:
-            feedback = None  # generation itself failed — nothing useful to correct
-            continue
-        ok, err = await harness_generator._verify(language, spec, len(cases))
-        if not ok:
-            feedback = err
-            continue
-        result = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
-        break
+    # Coalesces concurrent misses for the same key (e.g. two "Run Tests"
+    # clicks before the first generation finishes) into one LLM+sandbox
+    # round trip instead of each caller paying for its own.
+    async with await _locks.get(key):
+        if key in _cache:
+            return _cache[key]
 
-    _cache[key] = result
-    return result
+        question = {"title": "", "prompt": problem, "tests": cases, "function_name": method_name}
+        feedback = None
+        result = None
+        for _attempt in range(harness_generator._GENERATION_ATTEMPTS):
+            spec = await asyncio.to_thread(harness_generator._generate, language, question, feedback)
+            if not spec:
+                feedback = None  # generation itself failed — nothing useful to correct
+                continue
+            ok, err = await harness_generator._verify(language, spec, len(cases))
+            if not ok:
+                feedback = err
+                continue
+            result = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
+            break
+
+        _cache[key] = result
+        return result
 
 
 async def get_or_generate_signature(language: str, problem: str, cases: list[dict]) -> str | None:
@@ -98,14 +105,17 @@ async def get_or_generate_signature(language: str, problem: str, cases: list[dic
     if key in _cache:
         return _cache[key]
 
-    question = {"title": "", "prompt": problem, "tests": cases}
-
     import asyncio
-    code = None
-    for _attempt in range(harness_generator._GENERATION_ATTEMPTS):
-        code = await asyncio.to_thread(harness_generator._generate_signature, language, method_name, question)
-        if code:
-            break
+    async with await _locks.get(key):
+        if key in _cache:
+            return _cache[key]
 
-    _cache[key] = code
-    return code
+        question = {"title": "", "prompt": problem, "tests": cases}
+        code = None
+        for _attempt in range(harness_generator._GENERATION_ATTEMPTS):
+            code = await asyncio.to_thread(harness_generator._generate_signature, language, method_name, question)
+            if code:
+                break
+
+        _cache[key] = code
+        return code

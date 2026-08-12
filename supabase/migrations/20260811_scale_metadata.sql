@@ -1,0 +1,11 @@
+-- System-design questions previously had scale numbers (daily active users,
+-- writes/reads per second, latency targets, etc.) only as unstructured
+-- strings buried inside the "constraints" array, e.g.
+-- "100M writes/day (~1,200/sec)" — not queryable or renderable as distinct
+-- metadata. This adds a structured tag list instead: a flexible
+-- [{"label": "...", "value": "..."}] shape rather than a fixed set of
+-- numeric columns, since different system-design problems care about very
+-- different metrics (a URL shortener cares about writes/sec; a video
+-- platform cares about storage/bandwidth) and forcing one rigid schema
+-- would leave most columns null for most questions.
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS scale_metadata JSONB;

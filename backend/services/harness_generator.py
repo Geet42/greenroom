@@ -27,7 +27,8 @@ import re
 
 import httpx
 
-from services import piston
+from services import piston, singleflight
+from services.logger import log
 
 _BOUNDARY = "###---{}---###"
 
@@ -186,7 +187,8 @@ def _generate(language: str, question: dict, corrective_feedback: str | None = N
         llm = _make_llm(temperature=0.2, max_tokens=3000)
         result = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
         raw = result.content
-    except Exception:
+    except Exception as exc:
+        log.warning("harness_generator.primary_llm_failed", language=language, error=str(exc))
         try:
             resp = httpx.post(
                 f"{os.environ['FALLBACK_BASE_URL']}/chat/completions",
@@ -200,7 +202,8 @@ def _generate(language: str, question: dict, corrective_feedback: str | None = N
             )
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"]
-        except Exception:
+        except Exception as exc2:
+            log.error("harness_generator.fallback_llm_failed", language=language, error=str(exc2))
             return None
 
     boilerplate = _section(raw, b_marker, [s_marker, h_marker])
@@ -306,6 +309,12 @@ _GENERATION_ATTEMPTS = 4
 # already proven to fail, indefinitely.
 _UNSUPPORTED_MARKER = {"unsupported": True}
 
+# Coalesces concurrent generation for the same (question_id, language) —
+# e.g. two candidates hitting a bank question's first-ever Java run at the
+# same time — into one LLM+sandbox+Supabase round trip instead of each
+# paying for their own.
+_generation_locks = singleflight.AsyncKeyedLocks()
+
 
 async def get_or_generate(question: dict, language: str) -> dict | None:
     """Returns {"boilerplate": ..., "harness": ...} for this (question, language)
@@ -338,24 +347,36 @@ async def get_or_generate(question: dict, language: str) -> dict | None:
         return cached
 
     import asyncio
-    feedback = None
-    for attempt in range(1, _GENERATION_ATTEMPTS + 1):
-        spec = await asyncio.to_thread(_generate, language, question, feedback)
-        if not spec:
-            feedback = None  # generation itself failed (not a compile error) — nothing useful to correct
-            continue
+    lock_key = (question["id"], language)
+    async with await _generation_locks.get(lock_key):
+        # Re-check now that we hold the lock — another concurrent caller for
+        # the same question/language may have just finished and persisted.
+        cached = (question.get("harnesses") or {}).get(language)
+        if cached == _UNSUPPORTED_MARKER:
+            return None
+        if cached:
+            return cached
 
-        ok, err = await _verify(language, spec, len(question["tests"]))
-        if not ok:
-            feedback = err
-            continue
+        feedback = None
+        for attempt in range(1, _GENERATION_ATTEMPTS + 1):
+            spec = await asyncio.to_thread(_generate, language, question, feedback)
+            if not spec:
+                feedback = None  # generation itself failed (not a compile error) — nothing useful to correct
+                continue
 
-        harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
-        await asyncio.to_thread(_persist, question["id"], language, harness_data)
-        return harness_data
+            ok, err = await _verify(language, spec, len(question["tests"]))
+            if not ok:
+                feedback = err
+                continue
 
-    await asyncio.to_thread(_persist, question["id"], language, _UNSUPPORTED_MARKER)
-    return None
+            harness_data = {"boilerplate": spec["boilerplate"], "harness": spec["harness"]}
+            question.setdefault("harnesses", {})[language] = harness_data
+            await asyncio.to_thread(_persist, question["id"], language, harness_data)
+            return harness_data
+
+        question.setdefault("harnesses", {})[language] = _UNSUPPORTED_MARKER
+        await asyncio.to_thread(_persist, question["id"], language, _UNSUPPORTED_MARKER)
+        return None
 
 
 def _persist_question_field(question_id: str, field: str, language: str, data) -> None:
@@ -370,8 +391,8 @@ def _persist_question_field(question_id: str, field: str, language: str, data) -
         existing[language] = data
         sb.table("questions").update({field: existing}).eq("id", question_id).execute()
         question_bank.refresh()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.error("harness_generator.persist_failed", question_id=question_id, field=field, error=str(exc))
 
 
 def _persist(question_id: str, language: str, harness_data: dict) -> None:
@@ -464,13 +485,15 @@ def _generate_signature(language: str, method_name: str, question: dict) -> str 
     try:
         llm = _make_llm(temperature=0.2, max_tokens=400)
         raw = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content
-    except Exception:
+    except Exception as exc:
+        log.warning("harness_generator.signature_primary_llm_failed", language=language, error=str(exc))
         try:
             raw = _fallback_chat(
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 max_tokens=400, temperature=0.2,
             )
-        except Exception:
+        except Exception as exc2:
+            log.error("harness_generator.signature_fallback_llm_failed", language=language, error=str(exc2))
             return None
 
     code = raw.strip().strip("`").strip()

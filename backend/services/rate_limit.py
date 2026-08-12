@@ -24,6 +24,8 @@ from threading import Lock
 
 from fastapi import HTTPException, status
 
+from services.logger import log
+
 _WINDOW_SECONDS = 60
 _PRUNE_AFTER_SECONDS = 300
 
@@ -40,7 +42,8 @@ def check_rate_limit(key: str, max_per_minute: int = 30) -> None:
             _check_postgres(sb, key, max_per_minute)
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            log.error("rate_limit.postgres_check_failed", error=str(exc))
             _check_memory(key, max_per_minute)
     else:
         _check_memory(key, max_per_minute)

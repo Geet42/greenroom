@@ -43,6 +43,7 @@ def main():
             "tests": q["tests"],
             "constraints": q.get("constraints"),
             "examples": q.get("examples"),
+            "scale_metadata": q.get("scale_metadata"),
         }
         sb.table("questions").upsert(row).execute()
         print(f"  upserted {q['id']}")

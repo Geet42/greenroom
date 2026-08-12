@@ -65,6 +65,20 @@ function ProblemPanel({ questionContext }) {
           </span>
         </div>
 
+        {(questionContext.scale_metadata || []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {questionContext.scale_metadata.map((tag, i) => (
+              <span
+                key={i}
+                className="text-xs font-mono px-2 py-0.5 rounded-full bg-white/5 text-cream/70 border border-white/10"
+                title={tag.label}
+              >
+                <span className="text-mute">{tag.label}:</span> {tag.value}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 mt-3">
           {tabs.map((t) => (

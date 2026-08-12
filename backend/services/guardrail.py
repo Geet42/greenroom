@@ -22,6 +22,8 @@ import os
 import random
 import re
 
+from services.logger import log
+
 _COMPLEXITY_PATTERNS = [
     re.compile(r"O\(\s*[a-zA-Z0-9log\s\*\+\^,]+\s*\)"),
     re.compile(r"\b(time|space)\s+complexity\s+(is|would be)\s+O\(", re.IGNORECASE),
@@ -106,7 +108,8 @@ def _llm_judge(text: str, track: str) -> bool:
         resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
         return answer.startswith("YES")
-    except Exception:
+    except Exception as exc:
+        log.warning("guardrail.leak_judge_failed", track=track, error=str(exc))
         return False
 
 
@@ -132,8 +135,8 @@ def sanitize(draft: str, track: str, regenerate_fn) -> str:
         retry = regenerate_fn()
         if not violates(retry, track) and not _llm_judge(retry, track):
             return retry
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("guardrail.regenerate_failed", track=track, error=str(exc))
 
     return random.choice(_FALLBACK_QUESTIONS[track])
 
@@ -192,7 +195,8 @@ def _llm_judge_new_problem(text: str) -> bool:
         resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
         return answer.startswith("YES")
-    except Exception:
+    except Exception as exc:
+        log.warning("guardrail.new_problem_judge_failed", error=str(exc))
         return False
 
 
@@ -211,8 +215,8 @@ def sanitize_no_new_problem(draft: str, regenerate_fn) -> str:
         retry = regenerate_fn()
         if not introduces_new_problem(retry) and not _llm_judge_new_problem(retry):
             return retry
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("guardrail.new_problem_regenerate_failed", error=str(exc))
 
     return (
         "Let's keep digging into the problem you're already working on — what's the time "

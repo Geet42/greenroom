@@ -19,6 +19,7 @@ import random
 import re
 import threading
 
+from services.logger import log
 from services.supabase_client import get_supabase
 
 _CLASS_METHOD_PATTERN = re.compile(r"^(\w+)\(\)\.(\w+)$")
@@ -75,14 +76,48 @@ def infer_seniority(role: str | None) -> str:
     return "mid"
 
 
-def _weighted_choice(candidates: list[dict], seniority: str) -> dict | None:
+def _topic_matches_jd(topic: str | None, jd_topics: list[str] | None) -> bool:
+    """Loose match between a bank question's short kebab-case topic tag
+    (e.g. "dynamic-programming", "caching") and a free-text topic/keyword
+    pulled from an AI reading of the job description (e.g. "distributed
+    caching", "React"). Not exact NLP — just enough to bias selection
+    toward JD-relevant questions, never a hard filter, so a miss only
+    means "no boost," not "excluded"."""
+    if not topic or not jd_topics:
+        return False
+    topic_norm = topic.replace("-", " ").lower()
+    for jd_topic in jd_topics:
+        jd_norm = jd_topic.lower()
+        if topic_norm in jd_norm or jd_norm in topic_norm:
+            return True
+        if topic_norm in jd_norm.split() or any(w == topic_norm for w in jd_norm.split()):
+            return True
+    return False
+
+
+# Multiplier applied to a candidate's difficulty-based weight when its topic
+# matches something the JD analysis flagged — tuned to noticeably skew
+# selection toward JD-relevant questions without making non-matches
+# unreachable (a session's bank may have few/no questions on a given topic).
+_JD_TOPIC_BOOST = 3.0
+
+
+def _weighted_choice(
+    candidates: list[dict], seniority: str, jd_topics: list[str] | None = None,
+) -> dict | None:
     """Picks one candidate, weighting by difficulty per _DIFFICULTY_WEIGHTS
-    instead of a flat random.choice — falls back to uniform choice if the
-    weighted pool is empty (e.g. every candidate's difficulty has weight 0)."""
+    (with an extra boost for questions matching jd_topics, if given) instead
+    of a flat random.choice — falls back to uniform choice if the weighted
+    pool is empty (e.g. every candidate's difficulty has weight 0)."""
     if not candidates:
         return None
     weights = _DIFFICULTY_WEIGHTS[seniority]
-    scored = [(c, weights.get(c.get("difficulty") or "medium", 0)) for c in candidates]
+    scored = []
+    for c in candidates:
+        w = weights.get(c.get("difficulty") or "medium", 0)
+        if _topic_matches_jd(c.get("topic"), jd_topics):
+            w = (w or 0.05) * _JD_TOPIC_BOOST  # a 0-weight difficulty can still surface if it's JD-relevant
+        scored.append((c, w))
     total = sum(w for _, w in scored)
     if total <= 0:
         return random.choice(candidates)
@@ -107,7 +142,8 @@ def _load_from_supabase() -> list[dict] | None:
     try:
         resp = sb.table("questions").select("*").execute()
         return resp.data or None
-    except Exception:
+    except Exception as exc:
+        log.error("question_bank.supabase_load_failed", error=str(exc))
         return None
 
 
@@ -134,6 +170,8 @@ def pick_question(
     difficulty: str | list[str] | None = None,
     exclude_ids: set[str] | None = None,
     role: str | None = None,
+    jd_seniority: str | None = None,
+    jd_topics: list[str] | None = None,
 ) -> dict | None:
     """Random question matching track/language(/topic/difficulty). None if nothing
     matches — callers should fall back to ad hoc LLM-generated problems in that case.
@@ -149,12 +187,22 @@ def pick_question(
     for senior roles — via infer_seniority()/_weighted_choice() instead of a
     flat random.choice.
 
+    jd_seniority: an AI-derived seniority signal from the job description
+    (see services.question_generator.analyze_job_description) — takes
+    precedence over infer_seniority(role) when present, since it reflects
+    the actual role requirements rather than a keyword match on the role
+    title string.
+
+    jd_topics: AI-derived topics/keywords from the job description — biases
+    (not filters) the pick toward questions whose topic matches, via
+    _weighted_choice's JD boost.
+
     exclude_ids: question ids to skip — e.g. ones already assigned earlier in
     the same session (see "Next question" in routers/interview.py), so asking
     for another problem doesn't risk re-serving the one just finished.
     """
     explicit_difficulty = difficulty is not None
-    seniority = infer_seniority(role)
+    seniority = jd_seniority or infer_seniority(role)
     if difficulty is None:
         difficulty = ["easy", "medium", "hard"] if seniority == "senior" else ["easy", "medium"]
     elif isinstance(difficulty, str):
@@ -171,7 +219,7 @@ def pick_question(
         return None
     if explicit_difficulty:
         return random.choice(candidates)
-    return _weighted_choice(candidates, seniority)
+    return _weighted_choice(candidates, seniority, jd_topics)
 
 
 def get_question(question_id: str) -> dict | None:
@@ -179,12 +227,16 @@ def get_question(question_id: str) -> dict | None:
 
 
 def pick_behavioral_question(
-    topic: str | None = None, difficulty: str | list[str] | None = None, role: str | None = None,
+    topic: str | None = None,
+    difficulty: str | list[str] | None = None,
+    role: str | None = None,
+    jd_seniority: str | None = None,
+    jd_topics: list[str] | None = None,
 ) -> dict | None:
     """Random behavioral question, optionally filtered by topic and difficulty.
 
-    role: when `difficulty` isn't explicitly pinned, skews the pick's
-    difficulty mix by seniority (see pick_question)."""
+    role/jd_seniority/jd_topics: see pick_question — jd_seniority takes
+    precedence over role-based inference when present."""
     explicit_difficulty = difficulty is not None
     if isinstance(difficulty, str):
         difficulty = [difficulty]
@@ -198,15 +250,20 @@ def pick_behavioral_question(
         return None
     if explicit_difficulty:
         return random.choice(candidates)
-    return _weighted_choice(candidates, infer_seniority(role))
+    return _weighted_choice(candidates, jd_seniority or infer_seniority(role), jd_topics)
 
 
-def pick_system_design_question(difficulty: str | list[str] | None = None, role: str | None = None) -> dict | None:
+def pick_system_design_question(
+    difficulty: str | list[str] | None = None,
+    role: str | None = None,
+    jd_seniority: str | None = None,
+    jd_topics: list[str] | None = None,
+) -> dict | None:
     """Random system-design question. Includes all difficulties by default (unlike
     pick_question which excludes hard). None if the bank has no SD questions yet.
 
-    role: when `difficulty` isn't explicitly pinned, skews the pick's
-    difficulty mix by seniority (see pick_question)."""
+    role/jd_seniority/jd_topics: see pick_question — jd_seniority takes
+    precedence over role-based inference when present."""
     explicit_difficulty = difficulty is not None
     if isinstance(difficulty, str):
         difficulty = [difficulty]
@@ -219,5 +276,5 @@ def pick_system_design_question(difficulty: str | list[str] | None = None, role:
         return None
     if explicit_difficulty:
         return random.choice(candidates)
-    return _weighted_choice(candidates, infer_seniority(role))
+    return _weighted_choice(candidates, jd_seniority or infer_seniority(role), jd_topics)
 
