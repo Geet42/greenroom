@@ -278,12 +278,17 @@ def pick_system_design_question(
     role: str | None = None,
     jd_seniority: str | None = None,
     jd_topics: list[str] | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> dict | None:
     """Random system-design question. Includes all difficulties by default (unlike
     pick_question which excludes hard). None if the bank has no SD questions yet.
 
     role/jd_seniority/jd_topics: see pick_question — jd_seniority takes
-    precedence over role-based inference when present."""
+    precedence over role-based inference when present.
+
+    exclude_ids: question ids to skip — e.g. ones already assigned earlier in
+    the same session, so asking for another problem doesn't re-serve the one
+    just finished."""
     explicit_difficulty = difficulty is not None
     if isinstance(difficulty, str):
         difficulty = [difficulty]
@@ -291,6 +296,7 @@ def pick_system_design_question(
         q for q in _all_questions()
         if q.get("track") == "system-design"
         and (difficulty is None or (q.get("difficulty") or "medium") in difficulty)
+        and q["id"] not in (exclude_ids or set())
     ]
     if not candidates:
         return None

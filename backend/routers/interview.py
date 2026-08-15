@@ -155,19 +155,21 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
             session["track"] in ("technical", "system-design", "behavioral")
             and session.get("assigned_question") is None
         )
-        # Technical only: the candidate can explicitly ask for a different
-        # problem (e.g. "next question please", "can I get a new problem").
-        # The interviewer is otherwise hard-guardrailed against ever
-        # introducing a second problem on its own (see
-        # guardrail.sanitize_no_new_problem) — the code editor/boilerplate
-        # are tied to exactly one assigned question, so an uninvited switch
-        # would desync the transcript from what's actually gradable. This is
-        # the one deliberate, detectable exception: the candidate asking is
-        # a real signal the guardrail itself can't distinguish from the LLM
-        # going off script on its own.
+        # Technical and system-design only: the candidate can explicitly ask
+        # for a different problem (e.g. "next question please", "can I get a
+        # new problem"). The interviewer is otherwise hard-guardrailed against
+        # ever introducing a second problem on its own (see
+        # guardrail.sanitize_no_new_problem, which covers exactly these two
+        # tracks) — the code editor/diagram grading are tied to exactly one
+        # assigned question, so an uninvited switch would desync the
+        # transcript from what's actually gradable. This is the one
+        # deliberate, detectable exception: the candidate asking is a real
+        # signal the guardrail itself can't distinguish from the LLM going
+        # off script on its own. Behavioral is excluded — there's no
+        # editor/diagram state tied to the assigned prompt to desync.
         wants_new_question = (
             not is_first_reply
-            and session["track"] == "technical"
+            and session["track"] in ("technical", "system-design")
             and session.get("assigned_question")
             and guardrail.candidate_requests_new_problem(req.message)
         )
@@ -203,10 +205,17 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
                 await run_in_threadpool(persist_assigned_question, req.session_id, session["assigned_question"]["id"])
         elif wants_new_question:
             exclude_ids = session.get("asked_question_ids") or set()
-            new_question = await question_generator.select_or_generate_question(
-                session["role"], candidate_intro=session.get("candidate_intro", ""), exclude_ids=exclude_ids,
-                jd_analysis=session.get("jd_analysis"),
-            )
+            if session["track"] == "technical":
+                new_question = await question_generator.select_or_generate_question(
+                    session["role"], candidate_intro=session.get("candidate_intro", ""), exclude_ids=exclude_ids,
+                    jd_analysis=session.get("jd_analysis"),
+                )
+            else:
+                jd_analysis = session.get("jd_analysis")
+                new_question = await run_in_threadpool(
+                    question_bank.pick_system_design_question, None, session["role"],
+                    (jd_analysis or {}).get("seniority"), (jd_analysis or {}).get("topics"), exclude_ids,
+                )
             if new_question:
                 session["assigned_question"] = new_question
                 session.setdefault("asked_question_ids", set()).add(new_question["id"])
