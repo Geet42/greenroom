@@ -8,8 +8,10 @@ import Results from "./pages/Results";
 import AuthCallback from "./pages/AuthCallback";
 import Telemetry from "./pages/Telemetry";
 import RequireAuth from "./components/RequireAuth";
+import usePageViewTracking from "./hooks/usePageViewTracking";
 
 export default function App() {
+  usePageViewTracking();
   return (
     <Routes>
       <Route path="/" element={<Landing />} />

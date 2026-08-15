@@ -141,3 +141,13 @@ EVALUATION_SCORE = Histogram(
     ["track"],
     buckets=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
 )
+
+# ── Frontend page views ──────────────────────────────────────────────────────
+# Reported by the frontend via POST /api/analytics/event {event: "page_view"}.
+# `path` is bound to the frontend's own route table (see routers/analytics.py's
+# _KNOWN_PAGE_PATHS) so a malicious/buggy client can't inflate cardinality by
+# sending arbitrary path strings.
+
+PAGE_VIEW_TOTAL = Counter(
+    "page_view_total", "Frontend page views, by route", ["path"],
+)
