@@ -1,8 +1,9 @@
-import { lazy, Suspense, useRef } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Waveform from "../components/Waveform";
 import CodeEditor from "../components/CodeEditor";
+import SystemDesignProblemPanel from "../components/SystemDesignProblemPanel";
 import { useInterviewSession } from "../hooks/useInterviewSession";
 import { useCodeRunner } from "../hooks/useCodeRunner";
 
@@ -32,15 +33,24 @@ export default function Interview() {
   const track = params.get("track") || "behavioral";
   const resumeSessionId = params.get("session") || undefined;
   const boardRef = useRef(null);
+  // System-design's side panel just needs the raw context to render tabs —
+  // no boilerplate/language fetch like codeRunner does for technical, so a
+  // plain setState is enough. Re-fires (and the panel re-renders) whenever a
+  // new question is assigned, including via the "give me the next question"
+  // mid-session flow, not just on first assignment.
+  const [sdQuestionContext, setSdQuestionContext] = useState(null);
 
   const codeRunner = useCodeRunner();
   const session = useInterviewSession({
     track,
     boardRef,
-    // Only technical sessions have a code editor/boilerplate to fetch —
-    // wiring this unconditionally fired a wasted boilerplate request on
-    // every behavioral/system-design session's first assigned question.
-    onQuestionContext: track === "technical" ? codeRunner.handleQuestionAssigned : undefined,
+    // Only technical/system-design sessions have a side panel that needs
+    // this — wiring it unconditionally fired a wasted callback for every
+    // behavioral session's first assigned question.
+    onQuestionContext:
+      track === "technical" ? codeRunner.handleQuestionAssigned :
+      track === "system-design" ? setSdQuestionContext :
+      undefined,
     resumeSessionId,
     // Stamp the session id into the URL so a page refresh resumes the same
     // interview instead of starting a brand-new one.
@@ -51,14 +61,32 @@ export default function Interview() {
     },
   });
 
+  // Technical/system-design want the interview panel to fill the viewport
+  // exactly (editor/board + their own internal scroll areas) on screens with
+  // room for it, WITHOUT ever hard-clipping content on shorter viewports —
+  // h-screen + overflow-hidden guaranteed the former but silently clipped
+  // Excalidraw's bottom toolbar with no way to reach it at all on a common
+  // 1366x768 laptop screen (verified). min-h-screen without overflow-hidden
+  // gives the same exact-fit result when there's room, and safely falls back
+  // to an ordinary page scrollbar (always recoverable) when there isn't.
+  const isFixedHeightTrack = track === "technical" || track === "system-design";
+
   return (
     <div className="flex min-h-screen flex-col bg-stage">
       <Navbar />
-      <main className="flex-1">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 py-8 lg:grid-cols-[1.1fr_1fr]">
+      <main className={`flex-1 ${isFixedHeightTrack ? "flex flex-col" : ""}`}>
+        <div
+          className={`mx-auto grid grid-cols-1 gap-6 px-6 py-8 ${
+            isFixedHeightTrack
+              ? "h-full min-h-[600px] max-w-[1800px] grid-rows-[minmax(0,1fr)] lg:grid-cols-[380px_1fr]"
+              : "max-w-6xl lg:grid-cols-[1.1fr_1fr]"
+          }`}
+        >
 
           {/* ── Conversation column ── */}
-          <section className="flex flex-col rounded-2xl border border-white/10 bg-panel">
+          <section
+            className={`flex min-h-0 flex-col rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "h-full" : ""}`}
+          >
             <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
               <div className="flex items-center gap-2 text-sm text-mute">
                 <span className="h-2 w-2 rounded-full bg-sage" />
@@ -90,7 +118,10 @@ export default function Interview() {
               </div>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5" style={{ maxHeight: "55vh" }}>
+            <div
+              className="flex-1 min-h-0 space-y-4 overflow-y-auto px-5 py-5"
+              style={isFixedHeightTrack ? undefined : { maxHeight: "55vh" }}
+            >
               {session.loading && <p className="text-sm text-mute">Setting up your interviewer...</p>}
               {session.messages.map((m, i) => (
                 <div
@@ -186,8 +217,8 @@ export default function Interview() {
           </section>
 
           {/* ── Side column ── */}
-          <section className={`rounded-2xl border border-white/10 bg-panel${track === "technical" ? " overflow-hidden" : ""}`}
-            style={track === "technical" ? { height: "82vh" } : undefined}
+          <section
+            className={`min-h-0 rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "h-full overflow-hidden" : ""}`}
           >
             {track === "technical" ? (
               <CodeEditor
@@ -205,13 +236,23 @@ export default function Interview() {
                 onReset={codeRunner.handleResetBoilerplate}
               />
             ) : track === "system-design" ? (
-              <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
-                <SystemDesignBoard
-                  ref={boardRef}
-                  initialElements={session.initialDiagramElements}
-                  onSave={session.saveDiagram}
-                />
-              </Suspense>
+              // LeetCode-style split, matching the technical layout: a fixed
+              // problem panel on the left, the board on the right — instead
+              // of the board alone with no structured brief visible anywhere.
+              <div className="flex h-full">
+                <div className="w-[38%] min-w-[320px] max-w-[480px] shrink-0 border-r border-white/5">
+                  <SystemDesignProblemPanel questionContext={sdQuestionContext} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
+                    <SystemDesignBoard
+                      ref={boardRef}
+                      initialElements={session.initialDiagramElements}
+                      onSave={session.saveDiagram}
+                    />
+                  </Suspense>
+                </div>
+              </div>
             ) : (
   <div className="flex h-full flex-col p-6">
     <h2 className="font-display text-xl">During this session</h2>

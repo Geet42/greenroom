@@ -63,6 +63,10 @@ def _question_context(assigned: dict) -> QuestionContext:
         examples=assigned.get("examples") or [],
         is_stdio=is_stdio,
         scale_metadata=assigned.get("scale_metadata") or [],
+        functional_requirements=assigned.get("functional_requirements") or [],
+        non_functional_requirements=assigned.get("non_functional_requirements") or [],
+        scaling_constraints=assigned.get("scaling_constraints") or [],
+        out_of_scope=assigned.get("out_of_scope") or [],
     )
 
 
