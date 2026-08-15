@@ -1,27 +1,7 @@
 import { useState } from "react";
 import Editor from "@monaco-editor/react";
-import ReactMarkdown from "react-markdown";
+import Prose from "./Prose";
 import TestResultsPanel from "./TestResultsPanel";
-
-// Renders LLM-authored problem text (which may contain markdown like `code`,
-// **bold**, or bullet lists) instead of showing it as raw escaped text.
-function Prose({ children }) {
-  return (
-    <ReactMarkdown
-      components={{
-        p: ({ children }) => <p className="leading-relaxed">{children}</p>,
-        code: ({ children }) => (
-          <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-xs text-cream">{children}</code>
-        ),
-        ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
-        strong: ({ children }) => <strong className="font-semibold text-cream">{children}</strong>,
-      }}
-    >
-      {children}
-    </ReactMarkdown>
-  );
-}
 
 const LANGUAGES = [
   { id: "python",     label: "Python",     monaco: "python",     piston: "python", version: "3.10.0"  },
@@ -172,14 +152,18 @@ export default function CodeEditor({
   const lang = LANGUAGES.find((l) => l.id === language) ?? LANGUAGES[0];
 
   return (
-    <div className="flex flex-col h-full">
+    // LeetCode-style split: a fixed-width problem panel on the left, the
+    // editor + run console stacked on the right — instead of the previous
+    // problem-on-top-of-editor stack, which left both cramped inside one
+    // narrow column.
+    <div className="flex h-full">
 
       {/* ── Problem panel ── */}
-      <div className="border-b border-white/5" style={{ height: "42%" }}>
+      <div className="w-[38%] min-w-[320px] max-w-[480px] shrink-0 border-r border-white/5">
         <ProblemPanel questionContext={questionContext} />
       </div>
 
-      {/* ── Editor panel ── */}
+      {/* ── Editor + console ── */}
       <div className="flex flex-col flex-1 min-h-0">
 
         {/* Editor toolbar */}
@@ -223,30 +207,31 @@ export default function CodeEditor({
             value={code}
             onChange={(value) => setCode(value ?? "")}
             options={{
-              fontSize: 13,
+              fontSize: 14,
               minimap: { enabled: false },
               quickSuggestions: true,
               suggestOnTriggerCharacters: true,
               wordBasedSuggestions: "currentDocument",
               tabCompletion: "on",
               scrollBeyondLastLine: false,
+              padding: { top: 12 },
             }}
           />
         </div>
 
         {/* Run button — always visible, never pushed off-screen */}
-        <div className="border-t border-white/5 px-4 py-3 shrink-0">
+        <div className="border-t border-white/5 bg-panelLight/20 px-4 py-3 shrink-0">
           <button
             onClick={onRun}
             disabled={running}
-            className="rounded-full bg-sage px-5 py-2 text-sm font-medium text-ink transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-full bg-sage px-6 py-2.5 text-sm font-semibold text-ink shadow-lg shadow-sage/10 transition hover:opacity-90 hover:shadow-sage/20 disabled:opacity-50"
           >
             {running ? (
               <span className="flex items-center gap-2">
                 <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink border-t-transparent" />
                 Running…
               </span>
-            ) : "Run code"}
+            ) : "▶ Run code"}
           </button>
 
           {running && slowHint && (
@@ -270,7 +255,7 @@ export default function CodeEditor({
             how much space Monaco/toolbar/run-button actually consume and can
             still get clipped by the ancestor's overflow-hidden. */}
         {!running && testResults && (
-          <div className="min-h-0 overflow-y-auto px-4 pb-3" style={{ flex: "2 1 0%" }}>
+          <div className="min-h-0 overflow-y-auto border-t border-white/5 bg-ink/40 px-4 py-3" style={{ flex: "2 1 0%" }}>
             <TestResultsPanel testResults={testResults} revealedCount={revealedCount} />
           </div>
         )}

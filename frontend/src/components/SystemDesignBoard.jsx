@@ -84,7 +84,10 @@ const SystemDesignBoard = forwardRef(function SystemDesignBoard({ initialElement
         ))}
       </div>
 
-      <div className="relative flex-1" style={{ minHeight: "480px" }}>
+      {/* pb-3 leaves breathing room below the canvas so Excalidraw's own
+          bottom-pinned UI (hamburger menu, undo/redo) isn't flush against —
+          and easily clipped by — the panel's outer edge. */}
+      <div className="relative flex-1 pb-3" style={{ minHeight: "480px" }}>
         <Excalidraw
           excalidrawAPI={(a) => setApi(a)}
           onChange={handleChange}

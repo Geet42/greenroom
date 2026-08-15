@@ -89,6 +89,13 @@ class QuestionContext(BaseModel):
     examples: List[dict]
     is_stdio: bool
     scale_metadata: List[ScaleMetadataTag] = []
+    # System-design only — the structured problem brief rendered in the
+    # board's side panel (functional/non-functional requirements, scaling
+    # constraints, explicitly out-of-scope items). Empty for technical.
+    functional_requirements: List[str] = []
+    non_functional_requirements: List[str] = []
+    scaling_constraints: List[str] = []
+    out_of_scope: List[str] = []
 
 
 class MessageResponse(BaseModel):

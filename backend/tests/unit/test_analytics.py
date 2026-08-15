@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from models import AnalyticsEventRequest
+from routers.analytics import _merge_plural_dupes
 from services import persistence
 
 
@@ -42,3 +43,31 @@ def test_persist_analytics_event_writes_expected_row():
     assert inserted["session_id"] == "session-1"
     assert inserted["event"] == "code_run"
     assert inserted["properties"] == {"language": "python"}
+
+
+# --- _merge_plural_dupes (dashboard topic-breakdown grouping) --------------
+
+def test_merge_plural_dupes_merges_singular_and_plural_pair():
+    topics = {
+        "array": {"easy": 3, "medium": 2, "hard": 0},
+        "arrays": {"easy": 1, "medium": 0, "hard": 0},
+    }
+    result = _merge_plural_dupes(topics)
+    assert result == {"array": {"easy": 4, "medium": 2, "hard": 0}}
+
+
+def test_merge_plural_dupes_leaves_plural_only_topics_untouched():
+    """"two-pointers" has no singular counterpart in the bank — must not be
+    rewritten to "two-pointer" just because it ends in "s"."""
+    topics = {"two-pointers": {"easy": 0, "medium": 1, "hard": 0}}
+    result = _merge_plural_dupes(topics)
+    assert result == topics
+
+
+def test_merge_plural_dupes_leaves_unrelated_topics_untouched():
+    topics = {
+        "greedy": {"easy": 1, "medium": 0, "hard": 0},
+        "math": {"easy": 0, "medium": 1, "hard": 0},
+    }
+    result = _merge_plural_dupes(topics)
+    assert result == topics

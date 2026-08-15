@@ -697,6 +697,41 @@ def _describe_diagram_elements(elements: list[dict]) -> str | None:
     return "\n".join(parts)
 
 
+def _proximity_label(score: int) -> str:
+    """Derives the label from the score per the prompt's own stated bucketing
+    (0-3 / 4-6 / 7-10) instead of trusting the LLM's freeform label string —
+    guarantees label and score can never disagree, and sidesteps the exact
+    3-literal match that models.DiagramEvaluation's Literal type requires."""
+    if score <= 3:
+        return "needs work"
+    if score <= 6:
+        return "reasonable"
+    return "strong"
+
+
+class _DiagramEvaluation(BaseModel):
+    """Mirrors models.DiagramEvaluation's constraints (kept local rather than
+    imported — same reasoning as EvaluationResult above: this module owns its
+    own validation schemas rather than depending on the API-response module).
+    Used to catch a malformed LLM response (a non-int proximity_score, a
+    components list with non-string entries, etc.) HERE, inside
+    evaluate_diagram's own try/except, instead of letting it reach
+    routers/interview.py's unguarded `EndSessionResponse(diagram_evaluation=
+    ...)` construction and 500 the entire end-of-session request — the same
+    "Failed to end session" failure mode already fixed once for
+    evaluate_session (see _validate_eval_result), just not covered here yet."""
+    components_found: List[str]
+    components_missing: List[str]
+    proximity_score: int = Field(ge=0, le=10)
+    feedback: str
+
+
+def _validate_diagram_result(result: dict) -> dict:
+    validated = _DiagramEvaluation(**result).model_dump()
+    validated["proximity_label"] = _proximity_label(validated["proximity_score"])
+    return validated
+
+
 def evaluate_diagram(
     history: list[dict], assigned_question: dict, diagram_elements: list[dict] | None = None,
 ) -> dict:
@@ -736,8 +771,8 @@ def evaluate_diagram(
         metrics.record_usage("azure_openai", AZURE_OPENAI_DEPLOYMENT, getattr(raw_response, "usage_metadata", None))
         result = JsonOutputParser().invoke(raw_response)
         if hasattr(result, "model_dump"):
-            return result.model_dump()
-        return result
+            result = result.model_dump()
+        return _validate_diagram_result(result)
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
@@ -750,7 +785,7 @@ def evaluate_diagram(
                     )
                 cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
                 cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-                return json.loads(cleaned)
+                return _validate_diagram_result(json.loads(cleaned))
             except Exception:
                 pass
         return _default

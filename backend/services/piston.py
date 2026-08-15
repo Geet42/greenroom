@@ -39,6 +39,15 @@ def _is_oci_error(text: str) -> bool:
     return any(m in text for m in _OCI_MARKERS)
 
 
+class _Judge0Transient(Exception):
+    """Raised for retryable failure modes (network blip, Judge0's own infra
+    glitching, a submission that came back looking OCI-runtime-corrupted).
+    Must be an actual raise, not a `return None` — with_retry() only retries
+    on a raised exception, so returning None here silently turned the
+    configured attempts=2 into a no-op single try (every failure, transient
+    or not, went straight to "unavailable" with zero retries)."""
+
+
 async def _judge0(base_url: str, headers: dict, language: str, source: str, stdin: str) -> dict | None:
     lang_id = _JUDGE0_LANGUAGE_ID.get(language)
     if lang_id is None:
@@ -55,10 +64,10 @@ async def _judge0(base_url: str, headers: dict, language: str, source: str, stdi
             data = resp.json()
             status_id = data.get("status", {}).get("id")
             if status_id is None or status_id == _JUDGE0_INFRA_ERROR_STATUS:
-                return None
+                raise _Judge0Transient(f"judge0 infra status {status_id}")
             stderr = data.get("stderr") or data.get("compile_output") or ""
             if _is_oci_error(stderr):
-                return None
+                raise _Judge0Transient("OCI runtime error")
             return {
                 "run": {
                     "stdout": data.get("stdout") or "",
@@ -66,8 +75,8 @@ async def _judge0(base_url: str, headers: dict, language: str, source: str, stdi
                     "code": 0 if status_id == 3 else 1,
                 }
             }
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
-        return None
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+        raise _Judge0Transient(str(exc)) from exc
 
 
 async def _judge0_public(language: str, source: str, stdin: str) -> dict | None:
