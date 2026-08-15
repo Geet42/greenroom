@@ -95,22 +95,17 @@ function makeCloud(name, label, backgroundColor) {
   ]);
 }
 
-const SHAPE_DEFS = [
-  { name: "database", build: () => makeCylinder("database", "Database", "#a5d8ff") },
-  { name: "cache", build: () => makeContainer("cache", "Cache", { backgroundColor: "#ffec99", note: "e.g. Redis" }) },
-  { name: "load-balancer", build: () => makeContainer("load-balancer", "Load Balancer", { type: "diamond", backgroundColor: "#b2f2bb" }) },
-  { name: "queue", build: () => makeQueue("queue", "Message Queue", "#eebefa") },
-  { name: "cdn", build: () => makeCloud("cdn", "CDN", "#99e9f2") },
-  { name: "api-service", build: () => makeContainer("api-service", "API Service", { backgroundColor: "#ffc9c9" }) },
+// Each entry drives one button in the board's own shape strip (see
+// SystemDesignBoard.jsx) — clicking inserts a fresh copy of `build()` onto
+// the canvas directly, rather than routing through Excalidraw's built-in
+// library sidebar, which mixes in an always-visible (and here always-empty)
+// "Personal Library" section and a "Browse libraries" link to an external
+// site — both irrelevant clutter for a fixed, curated shape set.
+export const SYSTEM_DESIGN_SHAPES = [
+  { name: "database", label: "Database", build: () => makeCylinder("database", "Database", "#a5d8ff") },
+  { name: "cache", label: "Cache", build: () => makeContainer("cache", "Cache", { backgroundColor: "#ffec99", note: "e.g. Redis" }) },
+  { name: "load-balancer", label: "Load Balancer", build: () => makeContainer("load-balancer", "Load Balancer", { type: "diamond", backgroundColor: "#b2f2bb" }) },
+  { name: "queue", label: "Queue", build: () => makeQueue("queue", "Message Queue", "#eebefa") },
+  { name: "cdn", label: "CDN", build: () => makeCloud("cdn", "CDN", "#99e9f2") },
+  { name: "api-service", label: "API Service", build: () => makeContainer("api-service", "API Service", { backgroundColor: "#ffc9c9" }) },
 ];
-
-export function buildSystemDesignLibraryItems() {
-  const now = Date.now();
-  return SHAPE_DEFS.map((def, i) => ({
-    id: `system-design-${def.name}`,
-    status: "published",
-    elements: def.build(),
-    created: now + i, // distinct, monotonic — avoids any same-timestamp ordering ambiguity
-    name: def.name,
-  }));
-}
