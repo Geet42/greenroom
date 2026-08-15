@@ -432,16 +432,26 @@ def parse_results(stdout: str, stderr: str) -> dict:
         if tc.get("hidden"):
             hidden_tests.append({"id": tc.get("id", len(hidden_tests)), "passed": tc_passed})
         else:
+            output_val = tc.get("actual") if not tc_passed else tc.get("expected", "")
             entry: dict = {
                 "id":       tc.get("id", len(visible_tests) + 1),
                 "label":    tc.get("label", f"Case {len(visible_tests) + 1}"),
-                "input":    tc.get("input", ""),
-                "expected": tc.get("expected", ""),
-                "output":   tc.get("actual") if not tc_passed else tc.get("expected", ""),
+                # Harness JSON output may report a bool/number/list literal
+                # for input/expected/actual (e.g. a bool-returning problem
+                # like "Valid Parentheses" emits JSON `true`/`false`, not a
+                # string) — RunTestsResponse's VisibleTestResult requires
+                # str fields, and Pydantic v2 doesn't coerce bool -> str, so
+                # this crashed the whole /code/test call with a 500 (which
+                # the frontend then showed as a generic "could not reach the
+                # code execution service"). Stringify here, at the boundary
+                # that builds the API response shape.
+                "input":    str(tc.get("input", "")),
+                "expected": str(tc.get("expected", "")),
+                "output":   str(output_val) if output_val is not None else None,
                 "passed":   tc_passed,
             }
             if "actual" in tc and not tc_passed and "ERROR" in str(tc.get("actual", "")):
-                entry["error"] = tc["actual"]
+                entry["error"] = str(tc["actual"])
             visible_tests.append(entry)
 
     total = len(visible_tests) + len(hidden_tests)

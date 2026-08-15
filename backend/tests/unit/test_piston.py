@@ -52,9 +52,13 @@ async def test_judge0_success_returns_run_shape(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_judge0_internal_error_status_treated_as_unavailable(monkeypatch):
+    # Raises rather than returning None — this is a transient/retryable
+    # condition (Judge0's own infra glitched), and with_retry() only retries
+    # on a raised exception. Returning None here would make the configured
+    # retry attempts a silent no-op.
     _patch_client(monkeypatch, response=_FakeResponse({"status": {"id": 13, "description": "Internal Error"}}))
-    result = await piston._judge0_public("python", "print(1)", "")
-    assert result is None
+    with pytest.raises(piston._Judge0Transient):
+        await piston._judge0_public("python", "print(1)", "")
 
 
 @pytest.mark.asyncio
@@ -74,16 +78,48 @@ async def test_judge0_oci_error_in_stderr_treated_as_unavailable(monkeypatch):
         "status": {"id": 11, "description": "Runtime Error"},
         "stderr": "OCI runtime error: crun: clone: Resource temporarily unavailable",
     }))
-    result = await piston._judge0_public("python", "print(1)", "")
-    assert result is None
+    with pytest.raises(piston._Judge0Transient):
+        await piston._judge0_public("python", "print(1)", "")
 
 
 @pytest.mark.asyncio
-async def test_judge0_connect_error_returns_none(monkeypatch):
+async def test_judge0_connect_error_retries_then_raises(monkeypatch):
     import httpx
     _patch_client(monkeypatch, raises=httpx.ConnectError("boom"))
-    result = await piston._judge0_public("python", "print(1)", "")
-    assert result is None
+    with pytest.raises(piston._Judge0Transient):
+        await piston._judge0_public("python", "print(1)", "")
+
+
+@pytest.mark.asyncio
+async def test_run_code_retries_judge0_public_after_transient_failure(monkeypatch):
+    """The bug this covers: _judge0() used to swallow its own transient
+    failures and return None instead of raising, so with_retry()'s
+    configured attempts=2 never actually triggered a second attempt — one
+    network blip meant an immediate, permanent "unavailable" for that run.
+    Now the first call raises and the second (retried) call succeeds."""
+    import httpx
+
+    calls = {"n": 0}
+
+    class _FlakyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("boom")
+            return _FakeResponse({"status": {"id": 3, "description": "Accepted"}, "stdout": "2\n", "stderr": None})
+
+    monkeypatch.setattr(piston.httpx, "AsyncClient", lambda *a, **kw: _FlakyClient())
+    monkeypatch.setattr(piston, "_judge0_rapidapi", lambda *a, **kw: None)
+
+    result = await piston.run_code("python", "3.10.0", "print(1+1)", "")
+    assert calls["n"] == 2
+    assert result == {"run": {"stdout": "2\n", "stderr": "", "code": 0}}
 
 
 @pytest.mark.asyncio

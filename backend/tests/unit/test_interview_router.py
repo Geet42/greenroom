@@ -231,7 +231,7 @@ def test_delete_session_success_when_supabase_configured(client):
     assert resp.status_code == 200
     assert resp.json() == {"deleted": session_id}
     deleted_tables = {c.args[0] for c in sb.table.call_args_list}
-    assert deleted_tables == {"evaluations", "messages", "sessions"}
+    assert deleted_tables == {"evaluations", "messages", "analytics_events", "sessions"}
 
 
 def test_delete_session_ownership_enforced(client):
