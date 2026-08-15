@@ -1,6 +1,8 @@
 #!/bin/bash
-# One-command deploy: builds all three Docker images, pushes to GitHub Container Registry,
-# and updates the Azure Container Apps in Sweden Central.
+# One-command deploy: builds the backend and frontend Docker images, pushes to
+# GitHub Container Registry, and updates the Azure Container Apps in Sweden
+# Central. (Code execution runs via Judge0, not a self-hosted sandbox — see
+# ACTION_ITEMS.md's 2026-07-29 entry — so there's no third image to build.)
 #
 # Prerequisites (one-time):
 #   1. az login  (already done)
@@ -19,13 +21,11 @@ set -euo pipefail
 GITHUB_USER="vishwajeetraut"
 RESOURCE_GROUP="greenroom-rg"
 API_URL="https://greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io"
-PISTON_INTERNAL="http://greenroom-piston.internal.graybay-9c347e62.swedencentral.azurecontainerapps.io/api/v2/execute"
 FRONTEND_ORIGIN="https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io"
 
 # Image tags
 SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "latest")
 API_IMAGE="ghcr.io/$GITHUB_USER/greenroom-api:$SHA"
-PISTON_IMAGE="ghcr.io/$GITHUB_USER/greenroom-piston:$SHA"
 FRONTEND_IMAGE="ghcr.io/$GITHUB_USER/greenroom-frontend:$SHA"
 
 # ── Load secrets ──────────────────────────────────────────────────────────────
@@ -49,13 +49,6 @@ docker buildx build \
   --platform linux/amd64 \
   -t "$API_IMAGE" \
   "$SCRIPT_DIR/backend" \
-  --push
-
-echo "==> Building piston image (this takes ~3 min first time)..."
-docker buildx build \
-  --platform linux/amd64 \
-  -t "$PISTON_IMAGE" \
-  "$SCRIPT_DIR/piston" \
   --push
 
 echo "==> Building frontend image..."
@@ -86,15 +79,7 @@ az containerapp update \
     AZURE_OPENAI_ENDPOINT="$AZURE_OPENAI_ENDPOINT" \
     AZURE_OPENAI_DEPLOYMENT="${AZURE_OPENAI_DEPLOYMENT:-gpt-5-mini}" \
     AZURE_OPENAI_API_VERSION="${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}" \
-    PISTON_URL="$PISTON_INTERNAL" \
     ALLOWED_ORIGINS="$FRONTEND_ORIGIN" \
-  --output none
-
-echo "==> Deploying piston..."
-az containerapp update \
-  --name greenroom-piston \
-  --resource-group "$RESOURCE_GROUP" \
-  --image "$PISTON_IMAGE" \
   --output none
 
 echo "==> Deploying frontend..."
