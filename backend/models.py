@@ -9,6 +9,10 @@ class StartSessionRequest(BaseModel):
     role: str = Field(default="Software Engineer", min_length=1, max_length=100)
     user_id: Optional[str] = None
     job_description: Optional[str] = Field(default=None, max_length=5000)
+    # Optional, candidate-chosen — takes precedence over both the job
+    # description's AI-inferred seniority and role-string keyword matching
+    # (see jd_analysis merge in routers/interview.py:start_session).
+    seniority: Optional[Literal["junior", "mid", "senior"]] = None
 
 
 class VisibleTestResult(BaseModel):

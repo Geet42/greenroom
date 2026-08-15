@@ -38,7 +38,7 @@ async function request<T = unknown>(path: string, options: RequestOptions = {}):
 
 // ── Request / response shapes ─────────────────────────────────────────────────
 
-export interface StartSessionPayload { track: string; role?: string; job_description?: string }
+export interface StartSessionPayload { track: string; role?: string; job_description?: string; seniority?: string }
 export interface StartSessionResponse { session_id: string; track: string; question: string; expires_at?: string | null }
 
 export interface SendMessagePayload { session_id: string; message: string; code?: string; language?: string }

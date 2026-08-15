@@ -3,7 +3,22 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # Local dev copy of the backend (docker-compose's own "backend" service) —
+  # only reflects requests made against this machine, never real candidates.
   - job_name: greenroom-backend
     metrics_path: /metrics
     static_configs:
       - targets: ["backend:8000"]
+        labels:
+          env: local
+
+  # The real, deployed Azure Container App every candidate actually hits.
+  # /metrics has no auth (see main.py's comment on that endpoint) so this
+  # works with a plain HTTPS scrape — no credentials to configure here.
+  - job_name: greenroom-backend-production
+    scheme: https
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io"]
+        labels:
+          env: production

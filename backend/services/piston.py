@@ -5,6 +5,7 @@ import tempfile
 
 import httpx
 
+from services import metrics
 from services.logger import log
 from services.retry import with_retry
 
@@ -177,6 +178,12 @@ async def _local_subprocess(language: str, source: str, stdin: str) -> dict | No
 async def run_code(language: str, version: str, source: str, stdin: str = "") -> dict:
     import time
 
+    total_start = time.monotonic()
+
+    def _record(backend: str, status: str) -> None:
+        metrics.CODE_EXECUTION_TOTAL.labels(backend=backend, status=status).inc()
+        metrics.CODE_EXECUTION_LATENCY.observe(time.monotonic() - total_start)
+
     backends = [
         ("judge0_public", lambda: _judge0_public(language, source, stdin), 2, 0.5),
         ("judge0_rapidapi", lambda: _judge0_rapidapi(language, source, stdin), 2, 1.0),
@@ -191,6 +198,7 @@ async def run_code(language: str, version: str, source: str, stdin: str = "") ->
 
         if result:
             log.info("piston.run", language=language, latency_ms=round((time.monotonic() - start) * 1000), backend=name)
+            _record(name, "success")
             return result
 
         log.warning(f"piston.{name}_unavailable", language=language)
@@ -203,7 +211,9 @@ async def run_code(language: str, version: str, source: str, stdin: str = "") ->
 
     if result:
         log.info("piston.run", language=language, latency_ms=round((time.monotonic() - sub_start) * 1000), backend="subprocess")
+        _record("subprocess", "success")
         return result
 
     log.error("piston.all_unavailable", language=language)
+    _record("unavailable", "error")
     return _UNAVAILABLE

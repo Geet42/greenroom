@@ -3,9 +3,24 @@
   "uid": "greenroom-backend",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 3,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "env",
+        "type": "custom",
+        "label": "Environment",
+        "query": "production,local",
+        "current": { "text": "production", "value": "production" },
+        "options": [
+          { "text": "production", "value": "production", "selected": true },
+          { "text": "local", "value": "local", "selected": false }
+        ]
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
@@ -15,7 +30,7 @@
       "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total[5m])) by (path)",
+          "expr": "sum(rate(http_requests_total{env=\"$env\"}[5m])) by (path) or vector(0)",
           "legendFormat": "{{path}}",
           "refId": "A"
         }
@@ -29,7 +44,7 @@
       "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{env=\"$env\"}[5m])) by (le, path)) or vector(0)",
           "legendFormat": "{{path}}",
           "refId": "A"
         }
@@ -43,7 +58,7 @@
       "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_request_errors_total[5m])) by (path)",
+          "expr": "sum(rate(http_request_errors_total{env=\"$env\"}[5m])) by (path) or vector(0)",
           "legendFormat": "{{path}}",
           "refId": "A"
         }
@@ -57,8 +72,196 @@
       "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) by (path)",
+          "expr": "sum(rate(http_requests_total{env=\"$env\", status=~\"5..\"}[5m])) by (path) or vector(0)",
           "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Rate-limit rejections (429s, by path)",
+      "type": "timeseries",
+      "description": "Requests turned away by check_rate_limit — a sustained rate here means real users are being throttled, not just abuse being blocked. A flat line at 0 means none happened in this window, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{env=\"$env\", status=\"429\"}[5m])) by (path) or vector(0)",
+          "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Sessions started vs completed (by track)",
+      "type": "timeseries",
+      "description": "The gap between started and completed lines is abandonment — sessions begun but never finished. A flat line at 0 means no sessions in this window yet, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(sessions_started_total{env=\"$env\"}[1h])) by (track) or vector(0)",
+          "legendFormat": "{{track}} started",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sessions_completed_total{env=\"$env\"}[1h])) by (track) or vector(0)",
+          "legendFormat": "{{track}} completed",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "LLM provider request rate (success vs error)",
+      "type": "timeseries",
+      "description": "One series per (provider, outcome) — groq and azure_openai are primary calls; ollama_fallback only fires when a primary call already failed. A flat line at 0 means no calls in this window yet, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_provider_requests_total{env=\"$env\"}[5m])) by (provider, status) or vector(0)",
+          "legendFormat": "{{provider}} — {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "LLM provider p95 latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_provider_latency_seconds_bucket{env=\"$env\"}[5m])) by (le, provider)) or vector(0)",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "LLM fallback trigger rate (by call site)",
+      "type": "timeseries",
+      "description": "How often the primary LLM failed and the app had to reach for the Ollama-cloud backup. Should normally be ~0 — a sustained rate means the primary provider (Groq or Azure OpenAI) is degraded. A flat line at 0 means no fallbacks in this window, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_fallback_total{env=\"$env\"}[15m])) by (source) or vector(0)",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "Guardrail trigger rate (by track / reason)",
+      "type": "timeseries",
+      "description": "Times the interviewer's draft response was caught and rewritten before reaching the candidate — an answer leak or an attempt to introduce a second problem. A spike could mean a prompt regression. A flat line at 0 means no triggers in this window, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(guardrail_leak_detected_total{env=\"$env\"}[15m])) by (track, reason) or vector(0)",
+          "legendFormat": "{{track}} — {{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "Code execution failure rate (by backend)",
+      "type": "timeseries",
+      "description": "Judge0 public/RapidAPI and the local-subprocess last resort — \"unavailable\" means every backend failed and the candidate got a sandbox error. A flat line at 0 means no runs in this window, not that data is missing.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(code_execution_total{env=\"$env\"}[5m])) by (backend, status) or vector(0)",
+          "legendFormat": "{{backend}} — {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Code execution p95 latency",
+      "type": "timeseries",
+      "description": "Total time including any retries across backends before returning — a run that fails public Judge0 then succeeds on RapidAPI shows up here as the full elapsed time, not just the winning attempt.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(code_execution_latency_seconds_bucket{env=\"$env\"}[5m])) by (le)) or vector(0)",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "title": "LLM token usage rate (by provider / direction)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_tokens_total{env=\"$env\"}[15m])) by (provider, direction) or vector(0)",
+          "legendFormat": "{{provider}} — {{direction}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "title": "Estimated LLM spend (selected time range)",
+      "type": "stat",
+      "description": "Only counts providers with a verified $/1M rate in backend/data/model_rates.json — currently gpt-5-mini (Azure) and Groq (free tier, $0). Ollama-cloud fallback usage isn't priced in yet. Shows $0.00 rather than \"No data\" when nothing has been spent yet.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 4, "noValue": "$0.00" }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(llm_cost_dollars_total{env=\"$env\"}[$__range])) by (provider) or vector(0)",
+          "legendFormat": "{{provider}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Page views (by route)",
+      "type": "timeseries",
+      "description": "Frontend page navigations reported by the browser (react-router route changes), signed-in users only — anonymous visits to the landing/login/signup pages aren't tracked. A flat line at 0 means no views in this window, not that data is missing.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(page_view_total{env=\"$env\"}[15m])) by (path) or vector(0)",
+          "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "title": "Evaluation score distribution (0-10, all tracks)",
+      "type": "heatmap",
+      "description": "Distribution of overall_score across completed sessions in the selected range. A sudden shift can mean the grading prompt or model changed behavior, not that candidates changed. Unlike the panels above, this one can still legitimately show \"No data\" until at least one session has been fully evaluated in the selected range.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 73 },
+      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "targets": [
+        {
+          "expr": "sum(increase(evaluation_score_bucket{env=\"$env\"}[$__range])) by (le)",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
           "refId": "A"
         }
       ]
@@ -67,7 +270,8 @@
       "id": 5,
       "title": "Live backend logs",
       "type": "logs",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+      "description": "Local Docker containers only — production runs on Azure Container Apps, which doesn't have a Docker socket for Promtail to read, so real candidate traffic never reaches this panel yet. See the Prometheus panels above for production data.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 82 },
       "datasource": { "type": "loki", "uid": "greenroom-loki" },
       "options": {
         "showTime": true,
@@ -86,7 +290,8 @@
       "id": 6,
       "title": "Live backend errors",
       "type": "logs",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 },
+      "description": "Local only — see note on \"Live backend logs\" above.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 92 },
       "datasource": { "type": "loki", "uid": "greenroom-loki" },
       "options": {
         "showTime": true,

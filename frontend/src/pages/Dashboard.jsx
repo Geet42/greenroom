@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [selectedTrack, setSelectedTrack] = useState(null);
   const [jobDescription, setJobDescription] = useState("");
+  const [seniority, setSeniority] = useState("");
   const jdRef = useRef(null);
 
   useEffect(() => {
@@ -57,6 +58,8 @@ export default function Dashboard() {
   const handleStartSession = () => {
     if (jobDescription.trim()) sessionStorage.setItem("interview_jd", jobDescription.trim());
     else sessionStorage.removeItem("interview_jd");
+    if (seniority) sessionStorage.setItem("interview_seniority", seniority);
+    else sessionStorage.removeItem("interview_seniority");
     navigate(`/interview?track=${selectedTrack}`);
   };
   const [loading, setLoading] = useState(true);
@@ -238,6 +241,21 @@ export default function Dashboard() {
                 {jobDescription.length > 0 && (
                   <p className="mt-1 text-right text-xs text-mute">{jobDescription.length} / 5000</p>
                 )}
+
+                <label className="mt-4 block text-sm text-mute">
+                  Seniority level <span className="text-mute/60">(optional)</span>
+                </label>
+                <select
+                  value={seniority}
+                  onChange={(e) => setSeniority(e.target.value)}
+                  className="mt-2 w-full rounded-xl border border-white/10 bg-panelLight/40 px-4 py-3 text-sm text-cream outline-none focus:border-amber/40"
+                >
+                  <option value="">No preference</option>
+                  <option value="junior">Junior</option>
+                  <option value="mid">Mid-level</option>
+                  <option value="senior">Senior</option>
+                </select>
+
                 <div className="mt-4 flex items-center justify-end gap-3">
                   <button
                     onClick={() => setSelectedTrack(null)}

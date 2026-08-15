@@ -217,7 +217,9 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
 
         const jd = sessionStorage.getItem("interview_jd") || undefined;
         sessionStorage.removeItem("interview_jd");
-        const res = await api.startSession({ track, role: "Software Engineer", job_description: jd });
+        const seniority = sessionStorage.getItem("interview_seniority") || undefined;
+        sessionStorage.removeItem("interview_seniority");
+        const res = await api.startSession({ track, role: "Software Engineer", job_description: jd, seniority });
         setSessionId(res.session_id);
         setMessages([{ role: "interviewer", text: res.question }]);
         if (res.expires_at) setExpiresAt(new Date(res.expires_at));

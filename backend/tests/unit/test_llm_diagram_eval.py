@@ -8,18 +8,27 @@ requires would only crash later, unguarded, in routers/interview.py's
 entire /api/interview/end request for a system-design candidate who had
 already gotten a valid overall score.
 """
+import json
 from unittest.mock import MagicMock, patch
+
+from langchain_core.messages import AIMessage
 
 from models import DiagramEvaluation, EndSessionResponse
 from services import llm
 
 
 class _FakeBoundLLM:
-    def __init__(self, chain):
-        self._chain = chain
+    """Stands in for `_make_azure_llm(...).bind(...)` — supports `.invoke()`
+    directly, since evaluate_diagram calls it and then pipes the raw
+    response through the real JsonOutputParser itself (rather than a
+    LangChain `|` chain), so it can read usage_metadata off the raw
+    response first."""
 
-    def __or__(self, _parser):
-        return self._chain
+    def __init__(self, response: AIMessage):
+        self._response = response
+
+    def invoke(self, _messages):
+        return self._response
 
 
 def _question():
@@ -38,8 +47,7 @@ def test_evaluate_diagram_normalizes_a_mismatched_proximity_label():
     the LLM from drifting (capitalization, wording) — the label is now
     derived from the score instead of trusted verbatim, so a mismatch can't
     reach the strict Literal type downstream at all."""
-    chain = MagicMock()
-    chain.invoke.return_value = {
+    payload = {
         "components_found": ["database"],
         "components_missing": ["load balancer", "cache"],
         "proximity_score": 8,
@@ -47,7 +55,7 @@ def test_evaluate_diagram_normalizes_a_mismatched_proximity_label():
         "feedback": "Add a cache and load balancer.",
     }
     make_llm_result = MagicMock()
-    make_llm_result.bind.return_value = _FakeBoundLLM(chain)
+    make_llm_result.bind.return_value = _FakeBoundLLM(AIMessage(content=json.dumps(payload)))
 
     with patch.object(llm, "_make_azure_llm", return_value=make_llm_result):
         result = llm.evaluate_diagram(_history(), _question(), diagram_elements=None)
@@ -62,8 +70,7 @@ def test_evaluate_diagram_falls_back_to_default_on_wrong_types():
     """proximity_score as a string is a type the Literal/int schema can't
     coerce — must degrade to the safe default, never raise out of
     evaluate_diagram itself."""
-    chain = MagicMock()
-    chain.invoke.return_value = {
+    payload = {
         "components_found": ["database"],
         "components_missing": ["load balancer"],
         "proximity_score": "eight",  # wrong type
@@ -71,7 +78,7 @@ def test_evaluate_diagram_falls_back_to_default_on_wrong_types():
         "feedback": "Looks solid.",
     }
     make_llm_result = MagicMock()
-    make_llm_result.bind.return_value = _FakeBoundLLM(chain)
+    make_llm_result.bind.return_value = _FakeBoundLLM(AIMessage(content=json.dumps(payload)))
 
     with patch.object(llm, "_make_azure_llm", return_value=make_llm_result), \
          patch.object(llm, "_fallback_chat", side_effect=RuntimeError("fallback unconfigured")):
@@ -84,8 +91,7 @@ def test_evaluate_diagram_falls_back_to_default_on_wrong_types():
 
 
 def test_evaluate_diagram_success_path_passes_through_validated():
-    chain = MagicMock()
-    chain.invoke.return_value = {
+    payload = {
         "components_found": ["load balancer", "cache", "database"],
         "components_missing": [],
         "proximity_score": 9,
@@ -93,7 +99,7 @@ def test_evaluate_diagram_success_path_passes_through_validated():
         "feedback": "Great coverage.",
     }
     make_llm_result = MagicMock()
-    make_llm_result.bind.return_value = _FakeBoundLLM(chain)
+    make_llm_result.bind.return_value = _FakeBoundLLM(AIMessage(content=json.dumps(payload)))
 
     with patch.object(llm, "_make_azure_llm", return_value=make_llm_result):
         result = llm.evaluate_diagram(_history(), _question(), diagram_elements=None)

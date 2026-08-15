@@ -4,12 +4,20 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from auth import AuthenticatedUser, get_current_user
 from models import AnalyticsEventRequest
-from services import question_bank
+from services import metrics, question_bank
 from services.persistence import persist_analytics_event
 from services.rate_limit import check_rate_limit
 from services.supabase_client import get_supabase
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+# Mirrors the frontend's route table (frontend/src/App.jsx). Anything outside
+# this set is reported as "other" so a page_view event can never blow up
+# page_view_total's label cardinality.
+_KNOWN_PAGE_PATHS = {
+    "/", "/auth/callback", "/login", "/signup",
+    "/dashboard", "/interview", "/results/:sessionId", "/telemetry",
+}
 
 
 def _merge_plural_dupes(topics: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
@@ -42,6 +50,9 @@ async def track_event(
     background_tasks.add_task(
         persist_analytics_event, user.id, req.session_id, req.event, req.properties,
     )
+    if req.event == "page_view":
+        path = (req.properties or {}).get("path")
+        metrics.PAGE_VIEW_TOTAL.labels(path=path if path in _KNOWN_PAGE_PATHS else "other").inc()
     return {"status": "accepted"}
 
 
