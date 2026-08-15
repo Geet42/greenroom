@@ -1,10 +1,11 @@
 {
-  "_comment": "Fill in your ACTUAL plan's $/1M-token rates below — none are pre-filled, since guessing at pricing would silently misinform cost decisions. Get these from: Groq console billing page, your Ollama Cloud plan, and your Azure OpenAI resource's pricing tier (Azure plans/regions vary). scripts/benchmark_models.py reports 'no rate configured' and skips cost math for any model left null here — it never fabricates a number.",
+  "_comment": "$/1M-token rates. Verified values are sourced live (Azure Retail Prices API for gpt-5-mini, 2026-08-12; Groq's free tier confirmed directly). Unverified ones stay null rather than guessed — scripts/benchmark_models.py and services/metrics.py both skip cost math (but still count tokens) for any model left null here.",
   "llama-3.3-70b-versatile": {
     "provider": "groq",
     "used_for": "live interview conversation, question selection, guardrail checks (services/llm.py, question_generator.py)",
-    "input_per_1m_usd": null,
-    "output_per_1m_usd": null
+    "input_per_1m_usd": 0.0,
+    "output_per_1m_usd": 0.0,
+    "_note": "Currently on Groq's free tier — verified 2026-08-12, not a guess. Update if/when the account moves to a paid plan."
   },
   "llama3.3:70b": {
     "provider": "ollama-cloud",
@@ -21,7 +22,8 @@
   "gpt-5-mini": {
     "provider": "azure-openai",
     "used_for": "end-of-session evaluation report only (evaluate_session, _self_critique, evaluate_diagram)",
-    "input_per_1m_usd": null,
-    "output_per_1m_usd": null
+    "input_per_1m_usd": 0.45,
+    "output_per_1m_usd": 3.60,
+    "_note": "Verified via Azure Retail Prices API (GlobalStandard SKU, swedencentral), 2026-08-12 — not a guess."
   }
 }

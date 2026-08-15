@@ -22,6 +22,7 @@ import os
 import random
 import re
 
+from services import metrics
 from services.logger import log
 
 _COMPLEXITY_PATTERNS = [
@@ -94,18 +95,19 @@ def _llm_judge(text: str, track: str) -> bool:
         return False
     try:
         import httpx
-        resp = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 3,
-                "temperature": 0,
-            },
-            timeout=5,
-        )
-        resp.raise_for_status()
+        with metrics.track_llm_call("groq"):
+            resp = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 3,
+                    "temperature": 0,
+                },
+                timeout=5,
+            )
+            resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
         return answer.startswith("YES")
     except Exception as exc:
@@ -130,6 +132,8 @@ def sanitize(draft: str, track: str, regenerate_fn) -> str:
 
     if not layer1 and not layer2:
         return draft
+
+    metrics.GUARDRAIL_LEAK_DETECTED.labels(track=track, reason="answer_leak").inc()
 
     try:
         retry = regenerate_fn()
@@ -181,18 +185,19 @@ def _llm_judge_new_problem(text: str) -> bool:
     )
     try:
         import httpx
-        resp = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 3,
-                "temperature": 0,
-            },
-            timeout=5,
-        )
-        resp.raise_for_status()
+        with metrics.track_llm_call("groq"):
+            resp = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 3,
+                    "temperature": 0,
+                },
+                timeout=5,
+            )
+            resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
         return answer.startswith("YES")
     except Exception as exc:
@@ -200,16 +205,21 @@ def _llm_judge_new_problem(text: str) -> bool:
         return False
 
 
-def sanitize_no_new_problem(draft: str, regenerate_fn) -> str:
+def sanitize_no_new_problem(draft: str, regenerate_fn, track: str | None = None) -> str:
     """Same shape as sanitize(), scoped to the 'introduces a second coding
     problem' failure mode. Callers gate this themselves — only relevant once a
     technical problem has already been assigned (not on the turn it's first
-    presented, which legitimately looks like 'introducing a problem')."""
+    presented, which legitimately looks like 'introducing a problem').
+
+    track: only used to label the guardrail_leak_detected_total metric —
+    optional so existing callers/tests that don't pass it keep working."""
     layer1 = introduces_new_problem(draft)
     layer2 = not layer1 and _llm_judge_new_problem(draft)
 
     if not layer1 and not layer2:
         return draft
+
+    metrics.GUARDRAIL_LEAK_DETECTED.labels(track=track or "unknown", reason="new_problem").inc()
 
     try:
         retry = regenerate_fn()

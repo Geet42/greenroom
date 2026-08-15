@@ -24,7 +24,7 @@ from langchain_groq import ChatGroq
 from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 
-from services import guardrail
+from services import guardrail, metrics
 from services.logger import log
 
 # ── env ──────────────────────────────────────────────────────────────────────
@@ -320,23 +320,27 @@ def opening_message(track: str, role: str) -> str:
     start = time.monotonic()
     try:
         llm_client = _make_llm(temperature=0.9, max_tokens=120)
-        result = llm_client.invoke([
-            SystemMessage(content=system),
-            HumanMessage(content="[The interview session is starting now.]"),
-        ])
+        with metrics.track_llm_call("groq"):
+            result = llm_client.invoke([
+                SystemMessage(content=system),
+                HumanMessage(content="[The interview session is starting now.]"),
+            ])
+        metrics.record_usage("groq", GROQ_MODEL, getattr(result, "usage_metadata", None))
         log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="groq")
         return result.content.strip()
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
             log.warning("llm.opening.fallback", track=track, error=str(exc))
-            result = _fallback_chat(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": "[The interview session is starting now.]"},
-                ],
-                max_tokens=120, temperature=0.9,
-            )
+            metrics.record_fallback("interviewer")
+            with metrics.track_llm_call("ollama_fallback"):
+                result = _fallback_chat(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": "[The interview session is starting now.]"},
+                    ],
+                    max_tokens=120, temperature=0.9,
+                )
             log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="fallback")
             return result
         raise
@@ -431,7 +435,8 @@ def next_question(
                 ("human", "{input}"),
             ])
             chain = p | _make_llm(temperature=temperature, max_tokens=200) | StrOutputParser()
-            return chain.invoke({"history": lc_history, "input": last_turn})
+            with metrics.track_llm_call("groq"):
+                return chain.invoke({"history": lc_history, "input": last_turn})
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             if status is None or status == 429 or (isinstance(status, int) and status >= 500):
@@ -439,7 +444,9 @@ def next_question(
                 for m in lc_history:
                     raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
                 raw_msgs.append({"role": "user", "content": last_turn})
-                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+                metrics.record_fallback("interviewer")
+                with metrics.track_llm_call("ollama_fallback"):
+                    return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
             raise
 
     import time as _time
@@ -466,6 +473,7 @@ def next_question(
                 f"rewrite your response so it follows up on the ALREADY ASSIGNED problem instead: "
                 f"{assigned_question['prompt']}"
             )),
+            track=track,
         )
 
     log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
@@ -495,11 +503,13 @@ def _self_critique(track: str, role: str, transcript: str, draft: dict) -> dict:
         llm = _make_azure_llm(temperature=0.2, max_tokens=4000)
         llm_json = llm.bind(response_format={"type": "json_object"})
         parser = JsonOutputParser(pydantic_object=EvaluationResult)
-        chain = llm_json | parser
-        reviewed = chain.invoke([
-            SystemMessage(content=system_content),
-            HumanMessage(content=human_content),
-        ])
+        with metrics.track_llm_call("azure_openai"):
+            raw = llm_json.invoke([
+                SystemMessage(content=system_content),
+                HumanMessage(content=human_content),
+            ])
+        metrics.record_usage("azure_openai", AZURE_OPENAI_DEPLOYMENT, getattr(raw, "usage_metadata", None))
+        reviewed = parser.invoke(raw)
         if hasattr(reviewed, "model_dump"):
             reviewed = reviewed.model_dump()
         _reconcile_score(reviewed)
@@ -577,8 +587,10 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
     try:
         llm = _make_azure_llm(temperature=0.3, max_tokens=4000)
         llm_json = llm.bind(response_format={"type": "json_object"})
-        chain = llm_json | parser
-        result = chain.invoke(lc_messages)
+        with metrics.track_llm_call("azure_openai"):
+            raw_response = llm_json.invoke(lc_messages)
+        metrics.record_usage("azure_openai", AZURE_OPENAI_DEPLOYMENT, getattr(raw_response, "usage_metadata", None))
+        result = parser.invoke(raw_response)
         # Pydantic model → plain dict for the rest of the app
         if hasattr(result, "model_dump"):
             result = result.model_dump()
@@ -592,14 +604,16 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
             # (unconfigured, unreachable, timeout, 5xx, bad response shape) —
             # any of those must still fall through to the last-resort default
             # below rather than escape and 500 the end-of-interview request.
+            metrics.record_fallback("evaluation")
             try:
-                raw = _fallback_chat(
-                    [
-                        {"role": "system", "content": system_content},
-                        {"role": "user",   "content": transcript or "The candidate did not answer any questions."},
-                    ],
-                    max_tokens=4000, temperature=0.3, json_mode=True,
-                )
+                with metrics.track_llm_call("ollama_fallback"):
+                    raw = _fallback_chat(
+                        [
+                            {"role": "system", "content": system_content},
+                            {"role": "user",   "content": transcript or "The candidate did not answer any questions."},
+                        ],
+                        max_tokens=4000, temperature=0.3, json_mode=True,
+                    )
                 # Some fallback providers wrap JSON in markdown fences even
                 # with response_format=json_object set — strip before parsing.
                 cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
@@ -717,19 +731,23 @@ def evaluate_diagram(
     try:
         llm_client = _make_azure_llm(temperature=0.1, max_tokens=2000)
         llm_json = llm_client.bind(response_format={"type": "json_object"})
-        chain = llm_json | JsonOutputParser()
-        result = chain.invoke([HumanMessage(content=prompt)])
+        with metrics.track_llm_call("azure_openai"):
+            raw_response = llm_json.invoke([HumanMessage(content=prompt)])
+        metrics.record_usage("azure_openai", AZURE_OPENAI_DEPLOYMENT, getattr(raw_response, "usage_metadata", None))
+        result = JsonOutputParser().invoke(raw_response)
         if hasattr(result, "model_dump"):
             return result.model_dump()
         return result
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
+            metrics.record_fallback("evaluation")
             try:
-                raw = _fallback_chat(
-                    [{"role": "user", "content": prompt}],
-                    max_tokens=400, temperature=0.1, json_mode=True,
-                )
+                with metrics.track_llm_call("ollama_fallback"):
+                    raw = _fallback_chat(
+                        [{"role": "user", "content": prompt}],
+                        max_tokens=400, temperature=0.1, json_mode=True,
+                    )
                 cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
                 cleaned = re.sub(r"\n?```$", "", cleaned).strip()
                 return json.loads(cleaned)

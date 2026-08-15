@@ -25,6 +25,7 @@ from services import (
     guardrail,
     harness_generator,
     llm,
+    metrics,
     piston,
     question_bank,
     question_generator,
@@ -84,6 +85,15 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         greeting = await run_in_threadpool(llm.opening_message, req.track, req.role)
         jd_analysis = None
 
+    if req.seniority:
+        # Candidate's explicit choice overrides both the JD's AI-inferred
+        # seniority and role-string keyword matching — merged in once here so
+        # every downstream consumer of session["jd_analysis"] (post_message,
+        # question_bank, question_generator) picks it up for free via the
+        # existing "jd_seniority takes precedence" pattern, with no signature
+        # changes needed anywhere else.
+        jd_analysis = {**(jd_analysis or {}), "seniority": req.seniority}
+
     started_at = now()
     SESSIONS[session_id] = {
         "track": req.track,
@@ -101,6 +111,7 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "asked_question_ids": set(),
         "candidate_intro": "",
     }
+    metrics.SESSIONS_STARTED.labels(track=req.track).inc()
 
     await run_in_threadpool(
         persist_session_start, session_id, user.id, req.track, req.role, greeting,
@@ -490,6 +501,8 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
             }
             await run_in_threadpool(persist_evaluation, req.session_id, empty_result)
             session["status"] = "completed"
+            metrics.SESSIONS_COMPLETED.labels(track=session["track"]).inc()
+            metrics.EVALUATION_SCORE.labels(track=session["track"]).observe(0)
             return EndSessionResponse(overall_score=0, summary=empty_result["summary"], evaluations=[])
 
         result = await run_in_threadpool(llm.evaluate_session, session["track"], session["role"], session["history"])
@@ -505,6 +518,8 @@ async def end_session(req: EndSessionRequest, user: AuthenticatedUser = Depends(
 
         await run_in_threadpool(persist_evaluation, req.session_id, result)
         session["status"] = "completed"
+        metrics.SESSIONS_COMPLETED.labels(track=session["track"]).inc()
+        metrics.EVALUATION_SCORE.labels(track=session["track"]).observe(result.get("overall_score", 5))
 
     return EndSessionResponse(
         overall_score=result.get("overall_score", 5),
