@@ -386,8 +386,9 @@ async def _run_call_expected(req: RunTestsRequest, session: dict, assigned: dict
     )
     if harness is None:
         # bank_lang in ("java", "cpp") already returned above via
-        # _run_adhoc_compiled — this branch only remains reachable for
-        # python/node, where harness is None only if no problem is assigned.
+        # _run_adhoc_compiled, so req.language here is always python/node —
+        # generate_harness() itself now raises ValueError for anything else,
+        # so a None here can only mean "no problem assigned".
         return _error_response(
             "No coding problem has been assigned yet — wait for the interviewer to give you a problem first.",
             "permanent",

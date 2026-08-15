@@ -20,6 +20,7 @@ import re
 import threading
 
 from services.logger import log
+from services.question_schema import classify_and_validate
 from services.supabase_client import get_supabase
 
 _CLASS_METHOD_PATTERN = re.compile(r"^(\w+)\(\)\.(\w+)$")
@@ -147,6 +148,24 @@ def _load_from_supabase() -> list[dict] | None:
         return None
 
 
+def _warn_on_invalid_rows(rows: list[dict]) -> None:
+    """Soft, log-only validation against services.question_schema — never
+    drops or mutates a row, never raises. This is diagnostic only (the audit
+    script, backend/scripts/audit_question_bank.py, is the authoritative,
+    structured version of this same check); a malformed row still gets served
+    exactly as before, just with a warning logged, matching this module's
+    existing fail-open philosophy (Supabase -> seed fallback, None-returns
+    treated as "not available" everywhere downstream)."""
+    for row in rows:
+        _, issues = classify_and_validate(row)
+        if issues:
+            log.warning(
+                "question_bank.invalid_row",
+                id=row.get("id"), track=row.get("track"),
+                issues=[f"{i.field}: {i.message}" for i in issues],
+            )
+
+
 def _all_questions() -> list[dict]:
     """Cached for the life of the process; call refresh() to force a re-read
     (e.g. after editing the Supabase table) without restarting the backend."""
@@ -154,6 +173,7 @@ def _all_questions() -> list[dict]:
     with _lock:
         if _cache is None:
             _cache = _load_from_supabase() or _load_seed()
+            _warn_on_invalid_rows(_cache)
         return _cache
 
 

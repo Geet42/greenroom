@@ -276,11 +276,27 @@ def get_or_generate_cases(problem: str) -> list[dict] | None:
 
 def generate_harness(language: str, source: str, history: list[dict], assigned_question: dict | None = None) -> str | None:
     """
+    Call/expected harness injection — python/node ONLY. Java/C++ use a
+    different mechanism entirely (compiled harnesses via services.harness_generator
+    / services.adhoc_harness, routed in routers/interview.py before this is ever
+    called). A `None` return here means "no problem assigned yet /  couldn't
+    generate cases" and is shown to the candidate as such — so this function
+    must never be reached with an unsupported language, where that message
+    would be misleading. Callers are responsible for routing java/cpp away
+    from this function; raising here turns any future routing mistake into an
+    immediate loud failure instead of a silently wrong "no problem assigned" message.
+
     Prefers canonical, pre-verified test cases from the curated question bank
     (assigned_question — see services/question_bank.py) when the session was
     given one of those problems. Only falls back to LLM-generated cases for
     ad hoc problems the interviewer invented on its own.
     """
+    if language not in ("python", "node"):
+        raise ValueError(
+            f"generate_harness only supports python/node, got {language!r} — "
+            "java/cpp must be routed through harness_generator/adhoc_harness instead"
+        )
+
     if assigned_question and language in (assigned_question.get("languages") or []):
         cases = assigned_question["tests"]
     else:
@@ -293,9 +309,7 @@ def generate_harness(language: str, source: str, history: list[dict], assigned_q
 
     if language == "python":
         return _python_harness(source, cases)
-    if language == "node":
-        return _node_harness(source, cases)
-    return None  # Java/C++ not yet supported — caller shows appropriate message
+    return _node_harness(source, cases)
 
 
 # ── stdin/stdout test mode — language-agnostic, used by the CodeContests-derived

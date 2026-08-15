@@ -38,12 +38,32 @@ def main():
             "difficulty": q.get("difficulty"),
             "title": q["title"],
             "prompt": q["prompt"],
-            "function_name": q["function_name"],
+            "function_name": q.get("function_name"),
             "languages": q["languages"],
             "tests": q["tests"],
             "constraints": q.get("constraints"),
             "examples": q.get("examples"),
             "scale_metadata": q.get("scale_metadata"),
+            # Previously omitted — re-running this script silently nulled these
+            # out for every behavioral/system-design row in Supabase, since
+            # Supabase upsert sends exactly the given payload (missing keys
+            # aren't "leave unchanged"). Found by audit_question_bank.py.
+            "expected_elements": q.get("expected_elements"),
+            "expected_components": q.get("expected_components"),
+            "visible_count": q.get("visible_count"),
+            "functional_requirements": q.get("functional_requirements"),
+            "non_functional_requirements": q.get("non_functional_requirements"),
+            "scaling_constraints": q.get("scaling_constraints"),
+            "out_of_scope": q.get("out_of_scope"),
+            #
+            # harnesses/signatures: intentionally NEVER forwarded — those are
+            # derived, sandbox-verified caches that only ever exist in
+            # Supabase (never in this JSON seed, which has 0/357 populated).
+            # Forwarding a field this seed never populates is a no-op today,
+            # but it's a footgun if the seed is ever hand-edited or partially
+            # stale: it would silently overwrite live-verified harnesses with
+            # garbage. This script's job is resetting authored content, not
+            # round-tripping generated artifacts.
         }
         sb.table("questions").upsert(row).execute()
         print(f"  upserted {q['id']}")
