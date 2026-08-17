@@ -330,8 +330,8 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="mt-4 rounded-2xl border border-white/10">
-                <div className="max-h-[28rem] overflow-y-auto rounded-2xl">
-                <table className="w-full text-left text-sm">
+                <div className="max-h-[28rem] overflow-x-auto overflow-y-auto rounded-2xl">
+                <table className="w-full min-w-[640px] text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-panel text-mute">
                     <tr>
                       {selectionMode && <th className="px-4 py-3 w-8"></th>}

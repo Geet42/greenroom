@@ -156,9 +156,9 @@ Go to your repo → Settings → Secrets and variables → Actions → New repos
 git push origin main
 ```
 
-GitHub Actions runs two workflows:
-- **deploy-frontend** — builds Vite app, deploys to Static Web Apps (~2 min)
-- **deploy-containers** — builds Docker images, pushes to ghcr.io, updates Container Apps (~5 min)
+GitHub Actions runs two workflows, in sequence, not in parallel:
+1. **CI** (`ci.yml`) — lint + test, both backend and frontend
+2. **Build, Push & Deploy** (`deploy-containers.yml`) — only starts once CI reports success on `main` (via a `workflow_run` trigger, not an independent push trigger); builds both Docker images, pushes to `ghcr.io`, updates both Container Apps (backend and frontend — the frontend is a Container App too, not Azure Static Web Apps; Steps 1–4 above describe an earlier, no-longer-current topology), and polls `/api/health` afterward to confirm the new revision actually came up before calling the deploy done.
 
 Watch progress at: https://github.com/VishwajeetRaut/greenroom/actions
 

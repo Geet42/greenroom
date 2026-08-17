@@ -69,23 +69,32 @@ export default function Interview() {
   // 1366x768 laptop screen (verified). min-h-screen without overflow-hidden
   // gives the same exact-fit result when there's room, and safely falls back
   // to an ordinary page scrollbar (always recoverable) when there isn't.
+  //
+  // All of that is a DESKTOP layout, though: the two columns collapse to
+  // grid-cols-1 below lg (stacked), but grid-rows-[minmax(0,1fr)] only ever
+  // defines ONE row — on mobile the second stacked section landed in an
+  // auto-generated row with no real height, and Monaco/Excalidraw's own
+  // height:100% collapsed to near-zero inside it (verified: a barely-visible
+  // sliver of editor). Below lg, none of the fixed-height machinery applies;
+  // each section gets a real min-height instead and the page just scrolls,
+  // same as the "no room" desktop fallback above already does safely.
   const isFixedHeightTrack = track === "technical" || track === "system-design";
 
   return (
     <div className="flex min-h-screen flex-col bg-stage">
       <Navbar />
-      <main className={`flex-1 ${isFixedHeightTrack ? "flex flex-col" : ""}`}>
+      <main className={`flex-1 ${isFixedHeightTrack ? "lg:flex lg:flex-col" : ""}`}>
         <div
-          className={`mx-auto grid grid-cols-1 gap-6 px-6 py-8 ${
+          className={`mx-auto grid grid-cols-1 gap-6 px-4 py-6 sm:px-6 sm:py-8 ${
             isFixedHeightTrack
-              ? "h-full min-h-[600px] max-w-[1800px] grid-rows-[minmax(0,1fr)] lg:grid-cols-[380px_1fr]"
+              ? "max-w-[1800px] lg:h-full lg:min-h-[600px] lg:grid-rows-[minmax(0,1fr)] lg:grid-cols-[380px_1fr]"
               : "max-w-6xl lg:grid-cols-[1.1fr_1fr]"
           }`}
         >
 
           {/* ── Conversation column ── */}
           <section
-            className={`flex min-h-0 flex-col rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "h-full" : ""}`}
+            className={`flex min-h-0 flex-col rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "min-h-[70vh] lg:h-full lg:min-h-0" : ""}`}
           >
             <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
               <div className="flex items-center gap-2 text-sm text-mute">
@@ -218,7 +227,7 @@ export default function Interview() {
 
           {/* ── Side column ── */}
           <section
-            className={`min-h-0 rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "h-full overflow-hidden" : ""}`}
+            className={`min-h-0 rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "min-h-[70vh] lg:h-full lg:min-h-0 lg:overflow-hidden" : ""}`}
           >
             {track === "technical" ? (
               <CodeEditor
@@ -237,13 +246,14 @@ export default function Interview() {
               />
             ) : track === "system-design" ? (
               // LeetCode-style split, matching the technical layout: a fixed
-              // problem panel on the left, the board on the right — instead
-              // of the board alone with no structured brief visible anywhere.
-              <div className="flex h-full">
-                <div className="w-[38%] min-w-[320px] max-w-[480px] shrink-0 border-r border-white/5">
+              // problem panel on the left, the board on the right on screens
+              // with room for it. Below lg, side-by-side would squeeze the
+              // canvas into a sliver — stack the brief above the board instead.
+              <div className="flex h-full flex-col lg:flex-row">
+                <div className="max-h-[45vh] shrink-0 overflow-y-auto border-b border-white/5 lg:h-full lg:max-h-none lg:w-[38%] lg:min-w-[320px] lg:max-w-[480px] lg:border-b-0 lg:border-r">
                   <SystemDesignProblemPanel questionContext={sdQuestionContext} />
                 </div>
-                <div className="min-w-0 flex-1">
+                <div className="min-h-[420px] min-w-0 flex-1">
                   <Suspense fallback={<div className="p-6 text-sm text-mute">Loading board…</div>}>
                     <SystemDesignBoard
                       ref={boardRef}

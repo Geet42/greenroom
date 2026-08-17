@@ -1,26 +1,60 @@
-name: Build Images
+name: Build, Push & Deploy
 
+# Gated on the CI workflow (ci.yml) succeeding on main, via workflow_run —
+# not an independent push trigger. Before this, deploy ran in parallel with
+# CI on every push to main: a commit that failed lint/tests could still
+# build and go live in production at the same time CI was reporting it
+# broken, since the two workflows had no relationship to each other.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/deploy-containers.yml"
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  API_IMAGE: ghcr.io/${{ github.repository_owner }}/greenroom-api
+  GITHUB_USER: vishwajeetraut
+  RESOURCE_GROUP: greenroom-rg
+  API_APP: greenroom-api
+  FRONTEND_APP: greenroom-frontend
+  FRONTEND_ORIGIN: https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io
+  API_ORIGIN: https://greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io
+
+# A second push landing mid-deploy queues behind the first instead of
+# racing it — two overlapping `az containerapp update` calls against the
+# same app is the kind of thing that produces a genuinely confusing
+# incident, not just a wasted build.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  build-and-deploy:
+    name: Build & Deploy
     runs-on: ubuntu-latest
+    # workflow_run fires for every completed run of "CI" — including PR runs
+    # and failed runs. Only proceed for a successful run that was itself
+    # triggered by a push to main; a PR's CI run (event: pull_request) must
+    # never deploy, and a failed CI run must never deploy.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     permissions:
       contents: read
       packages: write
+    environment:
+      name: production
+      url: ${{ env.FRONTEND_ORIGIN }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_run checks out the default branch by default, not the
+          # commit that actually triggered the upstream CI run — pin to it
+          # explicitly so a deploy always ships the commit CI just validated.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -32,20 +66,109 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract metadata for API image
-        id: meta-api
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.API_IMAGE }}
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Build and push API image
+      # ── Build & push both images ─────────────────────────────────────────
+
+      - name: Build and push backend image
         uses: docker/build-push-action@v5
         with:
           context: backend
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta-api.outputs.tags }}
+          tags: |
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:latest
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_API_URL=${{ env.API_ORIGIN }}/api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Deploy to Azure Container Apps ───────────────────────────────────
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy backend
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name ${{ env.API_APP }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:${{ steps.sha.outputs.short }} \
+              --set-env-vars \
+                GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
+                GROQ_MODEL="${{ secrets.GROQ_MODEL }}" \
+                SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+                SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+                FALLBACK_BASE_URL="${{ secrets.FALLBACK_BASE_URL }}" \
+                FALLBACK_API_KEY="${{ secrets.FALLBACK_API_KEY }}" \
+                FALLBACK_MODEL="${{ secrets.FALLBACK_MODEL }}" \
+                AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}" \
+                ALLOWED_ORIGINS="${{ env.FRONTEND_ORIGIN }}" \
+              --output none
+
+      - name: Deploy frontend
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name ${{ env.FRONTEND_APP }} \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-frontend:${{ steps.sha.outputs.short }} \
+              --output none
+
+      # ── Verify the deploy actually landed ────────────────────────────────
+      # A successful `az containerapp update` only means Azure accepted the
+      # new image — it says nothing about whether the container actually
+      # started and passed its own startup checks. Poll the live health
+      # endpoint so a broken deploy fails loudly here instead of being
+      # discovered by the first candidate who tries to use the app.
+      - name: Verify backend health after deploy
+        run: |
+          echo "Waiting for the new revision to come up..."
+          for i in $(seq 1 10); do
+            status=$(curl -s -o /tmp/health.json -w "%{http_code}" "${{ env.API_ORIGIN }}/api/health" || echo "000")
+            if [ "$status" = "200" ] && grep -q '"status":"ok"' /tmp/health.json; then
+              echo "Backend healthy after deploy:"
+              cat /tmp/health.json
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $status, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::Backend did not report healthy within 100s of deploying. Check the Container App's revision logs before assuming this deploy is safe."
+          [ -f /tmp/health.json ] && cat /tmp/health.json
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Deployed commit \`${{ steps.sha.outputs.short }}\` to Azure" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: ${{ env.FRONTEND_ORIGIN }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: ${{ env.API_ORIGIN }}" >> $GITHUB_STEP_SUMMARY
