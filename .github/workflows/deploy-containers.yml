@@ -107,7 +107,7 @@ jobs:
       # has been reviewed and the noise is manageable, flip exit-code to '1'
       # (or add severity: 'CRITICAL' only) to make this an actual gate.
       - name: Scan backend image for known vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ghcr.io/${{ env.GITHUB_USER }}/greenroom-api:${{ steps.sha.outputs.short }}
           format: sarif
