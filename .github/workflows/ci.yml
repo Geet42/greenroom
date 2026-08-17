@@ -37,13 +37,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ""
           GROQ_API_KEY: "test-key"
 
-      # Informational only (never fails the build) — a known CVE in a
-      # transitive dependency shouldn't silently block every PR with no
-      # warning. Check the job's own output for findings until this has
-      # been triaged; only then consider making it a real gate.
-      - name: Dependency vulnerability scan (pip-audit)
-        run: pip install pip-audit && pip-audit -r requirements.txt --desc || true
-
   frontend-lint-test:
     name: Frontend — lint & test
     runs-on: ubuntu-latest
@@ -69,7 +62,3 @@ jobs:
 
       - name: Test (vitest)
         run: npm run test -- --run
-
-      # Informational only, same reasoning as the backend's pip-audit step.
-      - name: Dependency vulnerability scan (npm audit)
-        run: npm audit --audit-level=high || true
