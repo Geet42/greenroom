@@ -195,7 +195,6 @@ def main():
                 "cost_estimate": _cost(model_rates, last_result["input_tokens"], last_result["output_tokens"]),
             })
 
-    configured = {r["provider"] for r in rows}
     for name, key_check in [
         ("groq", llm_service.GROQ_API_KEY), ("ollama-cloud", llm_service.FALLBACK_API_KEY),
         ("azure-openai", llm_service.AZURE_OPENAI_API_KEY),

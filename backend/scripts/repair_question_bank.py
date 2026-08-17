@@ -53,8 +53,13 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from services import harness_generator, harness_verify, piston, question_bank, test_runner  # noqa: E402
-from services.logger import log  # noqa: E402
+from services import (  # noqa: E402
+    harness_generator,
+    harness_verify,
+    piston,
+    question_bank,
+    test_runner,
+)
 from services.supabase_client import get_supabase  # noqa: E402
 
 _LOG_PATH = os.path.join(os.path.dirname(__file__), "_repair_log.json")
