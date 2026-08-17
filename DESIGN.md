@@ -328,7 +328,7 @@ az containerapp update \
 **Backend:**
 ```
 GROQ_API_KEY=                          # https://console.groq.com/keys
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b       # llama-3.3-70b-versatile was deprecated by Groq — verify production's actual value, see note below
 SUPABASE_URL=https://...
 SUPABASE_SERVICE_ROLE_KEY=...          # Server-only, never expose to frontend
 FALLBACK_BASE_URL=https://api.ollama.ai/v1   # Optional, Ollama Cloud

@@ -15,4 +15,10 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# --no-access-log: main.py's own request_logger middleware already emits one
+# structured JSON line per request (method, route template, status, latency,
+# user_id) — uvicorn's default plain-text access log was duplicating every
+# request as a second, unstructured line in the same log stream, cluttering
+# the Grafana log panels for no added information.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

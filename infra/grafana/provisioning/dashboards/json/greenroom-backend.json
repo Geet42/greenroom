@@ -5,7 +5,10 @@
   "schemaVersion": 39,
   "version": 4,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -13,28 +16,71 @@
         "type": "custom",
         "label": "Environment",
         "query": "production,local",
-        "current": { "text": "production", "value": "production" },
+        "current": {
+          "text": "production",
+          "value": "production"
+        },
         "options": [
-          { "text": "production", "value": "production", "selected": true },
-          { "text": "local", "value": "local", "selected": false }
+          {
+            "text": "production",
+            "value": "production",
+            "selected": true
+          },
+          {
+            "text": "local",
+            "value": "local",
+            "selected": false
+          }
         ]
       },
       {
         "name": "user_id",
-        "type": "textbox",
-        "label": "User ID (JWT sub)",
-        "description": "Paste a candidate's Supabase user_id here to filter the log panels in the Logs row to just their activity. Leave blank to see all users. Requires the log panel's data source to actually be receiving production logs — see the 'Live backend logs (production)' panel description in the Logs row.",
-        "current": { "text": "", "value": "" },
-        "query": ""
+        "type": "query",
+        "label": "User — filters Logs row only",
+        "description": "Scope: the Logs row at the bottom of this dashboard ONLY. A dropdown of recent candidates (email + last-session time), newest first, pulled live from Supabase — pick one to filter the log panels to just their activity, or leave it on 'All' to see everyone. This does NOT filter the HTTP traffic / Sessions / AI pipeline / Guardrails / Evaluation panels above — those are Prometheus metrics aggregated across all users by design (a per-user label there would blow up Prometheus's cardinality), so they always show everyone's traffic regardless of this selection. Requires the 'Supabase Postgres' data source provisioned per infra/grafana/provisioning/datasources/supabase-postgres.yml.example — until then this dropdown is empty, which is expected, not a bug.",
+        "datasource": {
+          "type": "postgres",
+          "uid": "greenroom-supabase-pg"
+        },
+        "query": "SELECT s.user_id AS __value, COALESCE(u.email, s.user_id::text) || '  —  last session ' || to_char(max(s.created_at), 'YYYY-MM-DD HH24:MI') AS __text FROM sessions s LEFT JOIN auth.users u ON u.id = s.user_id GROUP BY s.user_id, u.email ORDER BY max(s.created_at) DESC LIMIT 50",
+        "refresh": 2,
+        "sort": 0,
+        "includeAll": true,
+        "allValue": "",
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
       }
     ]
   },
   "panels": [
     {
+      "id": 200,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Scope note:** the User filter above only applies to the **Logs** row at the bottom of this dashboard. Every other panel (HTTP traffic, Sessions & product usage, AI/LLM pipeline, Guardrails & code execution, Evaluation quality) is a Prometheus metric aggregated across *all* users by design, and ignores it."
+      }
+    },
+    {
       "id": 100,
       "type": "row",
       "title": "HTTP traffic",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
       "collapsed": false,
       "panels": []
     },
@@ -43,12 +89,35 @@
       "title": "Request rate (by route)",
       "type": "timeseries",
       "description": "Every request the API receives, grouped by matched route template (not raw path, so /interview/{session_id} candidates don't fragment into one series per session). A flat line at 0 means no traffic in this window, not that the panel is broken — check the request count in the legend table before assuming something's wrong.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -63,12 +132,35 @@
       "title": "p95 request latency (by route)",
       "type": "timeseries",
       "description": "95th-percentile response time per route — the number half your users' experience is worse than. Values are in seconds and auto-scale to ms in the legend/tooltip. A flat line at 0 means no requests in this window on that route, not that latency is actually zero.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -83,19 +175,42 @@
       "title": "Unhandled request errors (by route)",
       "type": "timeseries",
       "description": "Requests that raised an uncaught exception (not a normal 4xx/5xx HTTP response — an actual crash in request handling). This should sit at 0 essentially always; any nonzero value here is worth investigating immediately, unlike the other panels on this dashboard where a flat 0 line is the healthy/expected state.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "color": { "mode": "fixed", "fixedColor": "red" },
-          "custom": { "fillOpacity": 15 }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "custom": {
+            "fillOpacity": 15
+          }
         },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -110,19 +225,42 @@
       "title": "5xx response rate (by route)",
       "type": "timeseries",
       "description": "Server-side error responses (handled, but still a failure — a Judge0 timeout returning a clean 503 counts here, for example). A flat line at 0 is the healthy state, same convention as every other rate panel on this dashboard: it means zero errors happened, not that data is missing.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "color": { "mode": "fixed", "fixedColor": "orange" },
-          "custom": { "fillOpacity": 15 }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "custom": {
+            "fillOpacity": 15
+          }
         },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -137,15 +275,39 @@
       "title": "Rate-limit rejections (429s, by route)",
       "type": "timeseries",
       "description": "Requests turned away by check_rate_limit — a sustained rate here means real users are being throttled, not just abuse being blocked. A flat line at 0 means none happened in this window, not that data is missing.",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "yellow" } },
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -159,7 +321,12 @@
       "id": 101,
       "type": "row",
       "title": "Sessions & product usage",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
       "collapsed": false,
       "panels": []
     },
@@ -168,12 +335,35 @@
       "title": "Sessions started vs completed (by track)",
       "type": "timeseries",
       "description": "The gap between a track's 'started' and 'completed' lines is abandonment — sessions begun but never finished. A flat line at 0 means no sessions in this window yet, not that data is missing.",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -193,12 +383,35 @@
       "title": "Page views (by route)",
       "type": "timeseries",
       "description": "Frontend page navigations reported by the browser (react-router route changes), signed-in users only — anonymous visits to the landing/login/signup pages aren't tracked. A flat line at 0 means no views in this window, not that data is missing.",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -212,7 +425,12 @@
       "id": 102,
       "type": "row",
       "title": "AI / LLM pipeline",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
       "collapsed": false,
       "panels": []
     },
@@ -221,12 +439,35 @@
       "title": "LLM provider request rate (success vs error)",
       "type": "timeseries",
       "description": "One series per (provider, outcome) — groq and azure_openai are primary calls; ollama_fallback only fires when a primary call already failed. A flat line at 0 means no calls in this window yet, not that data is missing.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -241,12 +482,35 @@
       "title": "LLM provider p95 latency",
       "type": "timeseries",
       "description": "95th-percentile round-trip time per LLM provider, in seconds (auto-scales to ms). This is what the candidate actually waits on for the interviewer's next line or the end-of-session report — high values here show up directly as a slow-feeling app.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -261,15 +525,39 @@
       "title": "LLM fallback trigger rate (by call site)",
       "type": "timeseries",
       "description": "How often the primary LLM failed and the app had to reach for the Ollama-cloud backup. Should normally be ~0 — a sustained rate means the primary provider (Groq or Azure OpenAI) is degraded. A flat line at 0 means no fallbacks in this window, not that data is missing.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "yellow" } },
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -284,12 +572,35 @@
       "title": "LLM token usage rate (by provider / direction)",
       "type": "timeseries",
       "description": "Input vs. output tokens per provider per second — the direct driver of the spend panel below. A sustained rise in output tokens with no matching rise in request rate usually means responses are getting longer (prompt drift, a model swap), not that more people are using the app.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -304,10 +615,22 @@
       "title": "Estimated LLM spend (selected time range)",
       "type": "stat",
       "description": "Only counts providers with a verified $/1M rate in backend/data/model_rates.json — currently gpt-5-mini (Azure) and Groq (free tier, $0). Ollama-cloud fallback usage isn't priced in yet, so a spike in fallback traffic (see the panel above) won't show up here — treat this number as a floor, not a ceiling. Shows $0.00 rather than \"No data\" when nothing has been spent yet.",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 59 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "currencyUSD", "decimals": 4, "noValue": "$0.00" }
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "noValue": "$0.00"
+        }
       },
       "options": {
         "textMode": "value_and_name",
@@ -327,7 +650,12 @@
       "id": 103,
       "type": "row",
       "title": "Guardrails & code execution",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
       "collapsed": false,
       "panels": []
     },
@@ -336,15 +664,39 @@
       "title": "Guardrail trigger rate (by track / reason)",
       "type": "timeseries",
       "description": "Times the interviewer's draft response was caught and rewritten before reaching the candidate — an answer leak or an attempt to introduce a second problem. A spike could mean a prompt regression. A flat line at 0 means no triggers in this window, not that data is missing.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "orange" } },
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -359,12 +711,35 @@
       "title": "Code execution failure rate (by backend)",
       "type": "timeseries",
       "description": "Judge0 public/RapidAPI and the local-subprocess last resort — \"unavailable\" means every backend failed and the candidate got a sandbox error. A flat line at 0 means no runs in this window, not that data is missing.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -379,12 +754,35 @@
       "title": "Code execution p95 latency",
       "type": "timeseries",
       "description": "Total time including any retries across backends before returning — a run that fails public Judge0 then succeeds on RapidAPI shows up here as the full elapsed time, not just the winning attempt. Values are in seconds (auto-scales to ms).",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 76 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 78
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "options": {
-        "tooltip": { "mode": "multi", "sort": "desc" },
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
       },
       "targets": [
         {
@@ -398,7 +796,12 @@
       "id": 104,
       "type": "row",
       "title": "Evaluation quality",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 84 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 86
+      },
       "collapsed": false,
       "panels": []
     },
@@ -407,8 +810,16 @@
       "title": "Evaluation score distribution (0-10, all tracks)",
       "type": "heatmap",
       "description": "Distribution of overall_score across completed sessions in the selected range. A sudden shift can mean the grading prompt or model changed behavior, not that candidates changed. Unlike every rate panel above, this one can legitimately show \"No data\" until at least one session has been fully evaluated in the selected range — that's the one place on this dashboard where \"No data\" and \"0 events\" look the same and both mean the same thing.",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 85 },
-      "datasource": { "type": "prometheus", "uid": "greenroom-prometheus" },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 87
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "greenroom-prometheus"
+      },
       "targets": [
         {
           "expr": "sum(increase(evaluation_score_bucket{env=\"$env\"}[$__range])) by (le)",
@@ -421,8 +832,13 @@
     {
       "id": 105,
       "type": "row",
-      "title": "Logs",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 94 },
+      "title": "Logs — the only row the User filter above applies to",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 96
+      },
       "collapsed": false,
       "panels": []
     },
@@ -431,8 +847,16 @@
       "title": "Live backend logs (local Docker only)",
       "type": "logs",
       "description": "Local Docker containers only — production runs on Azure Container Apps, which doesn't have a Docker socket for Promtail to read, so real candidate traffic never reaches this panel. For production per-user logs use the 'Live backend logs (production)' panel below instead, which reads from Azure Monitor Log Analytics. Every log line (this panel and the production one) carries a user_id field — set the $user_id dashboard variable above to filter to one candidate's activity.",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 95 },
-      "datasource": { "type": "loki", "uid": "greenroom-loki" },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 97
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "greenroom-loki"
+      },
       "options": {
         "showTime": true,
         "showLabels": false,
@@ -451,8 +875,16 @@
       "title": "Live backend errors (local Docker only)",
       "type": "logs",
       "description": "Local only — see note on \"Live backend logs (local Docker only)\" above. Filters to ERROR level and, if set, the $user_id variable.",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 105 },
-      "datasource": { "type": "loki", "uid": "greenroom-loki" },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "greenroom-loki"
+      },
       "options": {
         "showTime": true,
         "showLabels": false,
@@ -471,8 +903,16 @@
       "title": "Live backend logs (production)",
       "type": "logs",
       "description": "Reads real candidate traffic from Azure Monitor Log Analytics (ContainerAppConsoleLogs_CL) — this is the panel that actually shows production data, unlike the Loki panels above which only ever see local Docker traffic. Requires: (1) infra/monitoring.bicep deployed (infra/deploy-monitoring.sh --apply) so the Container App's console logs flow into the Log Analytics workspace, and (2) the 'Azure Monitor Logs' data source provisioned per infra/grafana/provisioning/datasources/azure-monitor.yml.example — copy it, fill in your subscriptionId/tenantId/clientId/clientSecret and Log Analytics workspace GUID (from `az monitor log-analytics workspace show`), and remove the .example suffix so Grafana picks it up on next restart. Set the $user_id variable above to filter to one candidate. Shows \"Data source not found\" until provisioned — that's expected, not a bug.",
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 115 },
-      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "greenroom-azure-logs" },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 117
+      },
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "greenroom-azure-logs"
+      },
       "options": {
         "showTime": true,
         "showLabels": false,
