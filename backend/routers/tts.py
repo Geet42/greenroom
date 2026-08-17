@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from auth import AuthenticatedUser, get_current_user
 from services import tts
@@ -13,6 +14,6 @@ async def speak(
     text: str = Query(..., min_length=1, max_length=2000),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    check_rate_limit(user.id)
+    await run_in_threadpool(check_rate_limit, user.id)
     path = await tts.get_or_synthesize(text)
     return FileResponse(path, media_type="audio/mpeg", filename="speech.mp3")

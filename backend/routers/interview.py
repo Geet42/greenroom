@@ -73,8 +73,8 @@ def _question_context(assigned: dict) -> QuestionContext:
 
 @router.post("/start", response_model=StartSessionResponse)
 async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depends(get_current_user)):
-    check_rate_limit(user.id)
-    check_session_limit(user.id)
+    await run_in_threadpool(check_rate_limit, user.id)
+    await run_in_threadpool(check_session_limit, user.id)
 
     session_id = str(uuid.uuid4())
     if req.job_description:
@@ -151,7 +151,7 @@ async def list_sessions(
 
 @router.post("/message", response_model=MessageResponse)
 async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(get_current_user)):
-    check_rate_limit(user.id)
+    await run_in_threadpool(check_rate_limit, user.id)
 
     async with session_lock(req.session_id):
         session = get_session(req.session_id)
@@ -338,7 +338,7 @@ async def save_diagram(req: SaveDiagramRequest, user: AuthenticatedUser = Depend
     """Autosave endpoint for the system-design board — called debounced from
     the frontend while the candidate draws, so a refresh/resume restores the
     diagram along with the conversation instead of only the conversation."""
-    check_rate_limit(user.id, max_per_minute=30)
+    await run_in_threadpool(check_rate_limit, user.id, max_per_minute=30)
 
     session = get_session(req.session_id)
     if not session:
@@ -352,7 +352,7 @@ async def save_diagram(req: SaveDiagramRequest, user: AuthenticatedUser = Depend
 
 @router.post("/code/test", response_model=RunTestsResponse)
 async def run_tests(req: RunTestsRequest, user: AuthenticatedUser = Depends(get_current_user)):
-    check_rate_limit(user.id, max_per_minute=20)
+    await run_in_threadpool(check_rate_limit, user.id, max_per_minute=20)
 
     session = get_session(req.session_id)
     if not session:

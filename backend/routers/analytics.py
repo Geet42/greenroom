@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from auth import AuthenticatedUser, get_current_user
 from models import AnalyticsEventRequest
@@ -46,7 +47,7 @@ async def track_event(
     background_tasks: BackgroundTasks,
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    check_rate_limit(user.id, max_per_minute=60)
+    await run_in_threadpool(check_rate_limit, user.id, max_per_minute=60)
     background_tasks.add_task(
         persist_analytics_event, user.id, req.session_id, req.event, req.properties,
     )
@@ -58,7 +59,7 @@ async def track_event(
 
 @router.get("/stats")
 async def get_stats(user: AuthenticatedUser = Depends(get_current_user)):
-    check_rate_limit(user.id)
+    await run_in_threadpool(check_rate_limit, user.id)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured")
