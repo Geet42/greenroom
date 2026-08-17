@@ -102,6 +102,25 @@ az ad app federated-credential create \
   }'
 ```
 
+> **Status check, 2026-08:** this section documents the OIDC setup, but `.github/workflows/deploy-containers.yml` currently authenticates with a single `AZURE_CREDENTIALS` secret (a stored service-principal JSON blob via `az ad sp create-for-rbac --sdk-auth`), not the three `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets this step produces. Either this federated credential was never actually wired into the live workflow, or the workflow regressed back to a stored secret at some point — either way, **confirm before assuming OIDC is active.** Check with `az ad app federated-credential list --id $APP_ID` — if it returns the `github-main` credential above, OIDC is one workflow edit away:
+>
+> 1. In the repo's GitHub secrets, add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (from the `az ad sp create-for-rbac` output above) if they aren't already there. You can leave `AZURE_CREDENTIALS` in place for now — it becomes unused, not harmful, until you're ready to delete it.
+> 2. In `deploy-containers.yml`, on the `build-and-deploy` job, add `permissions: id-token: write` alongside the existing `contents: read` / `packages: write` (required for the OIDC token exchange).
+> 3. Replace the "Log in to Azure" step:
+>    ```yaml
+>    - name: Log in to Azure
+>      uses: azure/login@v2
+>      with:
+>        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+>        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+>        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+>    ```
+>    (drop the `creds:` line entirely — that's what selects password auth over OIDC).
+> 4. Push to a branch, run the workflow via `workflow_dispatch` first rather than trusting it on the next real deploy, confirm the Azure login step succeeds.
+> 5. Once confirmed working across a couple of runs, delete the `AZURE_CREDENTIALS` secret from the repo and revoke the old service-principal password (`az ad sp credential list` / `az ad sp credential delete` on the same app) so the long-lived credential is actually gone, not just unused.
+>
+> This is the single biggest gap between this pipeline and a genuinely "industry grade" one — a stored password-style secret has to be manually rotated and can leak in full if the repo or a log line ever exposes it; a federated OIDC token is minted fresh per run and can't be replayed outside that run. Do this migration deliberately, on a day nothing else is riding on the deploy pipeline working — a wrong `client-id` here fails loudly (auth error), but "loudly" during a live demo is still the wrong time to find out.
+
 ---
 
 ## Step 3 — Create Azure Static Web Apps
@@ -156,9 +175,9 @@ Go to your repo → Settings → Secrets and variables → Actions → New repos
 git push origin main
 ```
 
-GitHub Actions runs two workflows:
-- **deploy-frontend** — builds Vite app, deploys to Static Web Apps (~2 min)
-- **deploy-containers** — builds Docker images, pushes to ghcr.io, updates Container Apps (~5 min)
+GitHub Actions runs two workflows, in sequence, not in parallel:
+1. **CI** (`ci.yml`) — lint + test, both backend and frontend
+2. **Build, Push & Deploy** (`deploy-containers.yml`) — only starts once CI reports success on `main` (via a `workflow_run` trigger, not an independent push trigger); builds both Docker images, pushes to `ghcr.io`, updates both Container Apps (backend and frontend — the frontend is a Container App too, not Azure Static Web Apps; Steps 1–4 above describe an earlier, no-longer-current topology), and polls `/api/health` afterward to confirm the new revision actually came up before calling the deploy done.
 
 Watch progress at: https://github.com/VishwajeetRaut/greenroom/actions
 
