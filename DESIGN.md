@@ -3,7 +3,7 @@
 **Authors:** Vishwajeet, Geet, Anurag, Nithin, Mahati, Yuang
 **Version:** 6.0 · August 2026
 **Status:** Active
-**Live app:** https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
+**Live app:** https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io
 
 ---
 
@@ -289,8 +289,8 @@ Planned additions:
 ### Service URLs
 
 ```
-Frontend   https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
-API        https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io
+Frontend   https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io
+API        https://greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io
 Judge0     https://ce.judge0.com  (public, external — replaces the retired self-hosted Piston)
 ```
 
@@ -328,7 +328,7 @@ az containerapp update \
 **Backend:**
 ```
 GROQ_API_KEY=                          # https://console.groq.com/keys
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b       # llama-3.3-70b-versatile was deprecated by Groq — verify production's actual value, see note below
 SUPABASE_URL=https://...
 SUPABASE_SERVICE_ROLE_KEY=...          # Server-only, never expose to frontend
 FALLBACK_BASE_URL=https://api.ollama.ai/v1   # Optional, Ollama Cloud

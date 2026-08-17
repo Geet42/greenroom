@@ -1,6 +1,8 @@
 // Azure Monitor for Greenroom — Log Analytics + Application Insights + alert
-// rules for the three existing Container Apps (greenroom-api, greenroom-piston,
-// greenroom-frontend) in resource group `greenroom-rg`.
+// rules for the two existing Container Apps (greenroom-api, greenroom-frontend)
+// in resource group `greenroom-rg`. The self-hosted Piston container app
+// (greenroom-piston) was decommissioned 2026-08-03 in favor of the external
+// Judge0 service — see DESIGN.md §3 — so it's no longer monitored here.
 //
 // Nothing here is deployed yet — this is a proposal to review before running.
 // Deploy (after `az login`):
@@ -25,7 +27,7 @@ param environmentId string
 param alertEmail string
 
 @description('Container App names to monitor')
-param containerAppNames array = ['greenroom-api', 'greenroom-piston', 'greenroom-frontend']
+param containerAppNames array = ['greenroom-api', 'greenroom-frontend']
 
 var location = resourceGroup().location
 

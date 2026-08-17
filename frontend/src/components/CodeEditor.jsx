@@ -153,18 +153,21 @@ export default function CodeEditor({
 
   return (
     // LeetCode-style split: a fixed-width problem panel on the left, the
-    // editor + run console stacked on the right — instead of the previous
-    // problem-on-top-of-editor stack, which left both cramped inside one
-    // narrow column.
-    <div className="flex h-full">
+    // editor + run console stacked on the right, on screens with room for
+    // it — instead of the previous problem-on-top-of-editor stack, which
+    // left both cramped inside one narrow column. Below md, side-by-side
+    // would squeeze Monaco into a strip a few characters wide, so the
+    // problem panel stacks above the editor instead, capped to a fraction
+    // of the viewport so the editor is still visible without scrolling past it.
+    <div className="flex h-full flex-col md:flex-row">
 
       {/* ── Problem panel ── */}
-      <div className="w-[38%] min-w-[320px] max-w-[480px] shrink-0 border-r border-white/5">
+      <div className="max-h-[38vh] shrink-0 overflow-y-auto border-b border-white/5 md:h-full md:max-h-none md:w-[38%] md:min-w-[320px] md:max-w-[480px] md:border-b-0 md:border-r">
         <ProblemPanel questionContext={questionContext} />
       </div>
 
       {/* ── Editor + console ── */}
-      <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex min-h-[420px] flex-1 flex-col md:min-h-0">
 
         {/* Editor toolbar */}
         <div className="flex items-center justify-between border-b border-white/5 px-4 py-2 shrink-0">

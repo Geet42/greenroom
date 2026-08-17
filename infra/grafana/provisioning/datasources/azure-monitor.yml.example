@@ -1,0 +1,38 @@
+# Production log source for the "Live backend logs (production)" panel in
+# greenroom-backend.json. Unlike Loki (local Docker only, see loki.yml), this
+# reads real candidate traffic — Azure Container Apps ships console logs to
+# whatever Log Analytics workspace the Container Apps environment is attached
+# to, and this data source lets Grafana query that workspace with KQL.
+#
+# Setup:
+#   1. Deploy infra/monitoring.bicep first (infra/deploy-monitoring.sh --apply)
+#      — or confirm the Container Apps environment already has a Log Analytics
+#      workspace attached: az containerapp env show --name <env> \
+#        --resource-group greenroom-rg --query properties.appLogsConfiguration
+#   2. Create an Azure AD app registration Grafana can authenticate as (or
+#      reuse the same OIDC/service-principal identity CI already uses), and
+#      grant it "Log Analytics Reader" on the workspace.
+#   3. Fill in the four placeholders below.
+#   4. Copy this file to azure-monitor.yml (dropping .example) next to
+#      loki.yml and prometheus.yml, then restart Grafana so the provisioner
+#      picks it up. Not needed for local dev — this is production-only.
+#
+# The dashboard's KQL query references the "ContainerAppConsoleLogs_CL"
+# table, which is what Azure automatically creates once Container Apps log
+# forwarding is enabled — no custom Log Analytics schema to set up.
+
+apiVersion: 1
+
+datasources:
+  - name: Azure Monitor Logs
+    type: grafana-azure-monitor-datasource
+    access: proxy
+    uid: greenroom-azure-logs
+    jsonData:
+      azureAuthType: clientsecret
+      subscriptionId: "<your-azure-subscription-id>"
+      tenantId: "<your-azure-ad-tenant-id>"
+      clientId: "<app-registration-client-id>"
+      logAnalyticsDefaultWorkspace: "<log-analytics-workspace-guid>"
+    secureJsonData:
+      clientSecret: "<app-registration-client-secret>"

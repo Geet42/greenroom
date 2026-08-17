@@ -1,0 +1,39 @@
+# Backs the "User" dropdown at the top of the Greenroom Backend dashboard —
+# lists recent candidates (email + last-session time) so you can pick one and
+# see just their logs, instead of pasting a raw Supabase user_id by hand.
+#
+# Setup:
+#   1. Supabase dashboard -> Project Settings -> Database -> Connection info.
+#      Use the "Session pooler" (port 5432) or "Transaction pooler" (port
+#      6543) host, not the direct connection — Grafana's Postgres data
+#      source keeps a persistent connection pool of its own, and Supabase's
+#      poolers are meant for exactly this kind of external client.
+#   2. Fill in the four placeholders below (host, database, user, password —
+#      the same ones shown on that Connection info page).
+#   3. Copy this file to supabase-postgres.yml (dropping .example) next to
+#      loki.yml and prometheus.yml, then restart Grafana so the provisioner
+#      picks it up.
+#
+# The dashboard's $user_id query variable reads from `sessions` joined
+# against `auth.users` for the email — the same tables the backend itself
+# already writes to (see backend/services/persistence.py), no new schema.
+# Read-only: the query is a plain SELECT, and the Grafana Postgres data
+# source never writes to your database.
+
+apiVersion: 1
+
+datasources:
+  - name: Supabase Postgres
+    type: postgres
+    access: proxy
+    uid: greenroom-supabase-pg
+    url: "<pooler-host>:<pooler-port>"
+    database: postgres
+    user: "<database-user>"
+    jsonData:
+      sslmode: require
+      postgresVersion: 1500
+      maxOpenConns: 5
+      maxIdleConns: 2
+    secureJsonData:
+      password: "<database-password>"
