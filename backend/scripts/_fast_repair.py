@@ -7,18 +7,25 @@ verification as the pilot batch (services.harness_verify /
 services.piston) before persisting; type inference only removes toil, not
 verification."""
 import ast
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from import_neenza_boilerplate import (  # noqa: E402
-    build_java_harness, build_cpp_harness, parse_call_args,
-    java_type_decl, cpp_type_decl,
-)
 import repair_question_bank as rqb  # noqa: E402
+from import_neenza_boilerplate import (  # noqa: E402
+    build_cpp_harness,
+    build_java_harness,
+    cpp_type_decl,
+    java_type_decl,
+    parse_call_args,
+)
+
 from services.supabase_client import get_supabase  # noqa: E402
 
 _INT32_MAX = 2_147_483_647

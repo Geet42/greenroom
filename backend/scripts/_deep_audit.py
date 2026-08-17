@@ -18,11 +18,11 @@ WHOLE bank (not just recently-touched rows):
 Never mutates anything. Prints a flagged list for human review.
 """
 import ast
-import json
 import sys
 
 sys.path.insert(0, ".")
 from dotenv import load_dotenv
+
 load_dotenv(".env")
 from services.supabase_client import get_supabase
 
