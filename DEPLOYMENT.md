@@ -203,15 +203,19 @@ This stack is **local-only** — it does not run against the live Azure deployme
 
 ### Live deployed app
 
-The backend already logs one structured JSON line per event/request to stdout (`backend/services/logger.py`, `backend/main.py`) and exposes `GET /metrics` in Prometheus format — no extra setup needed to view them on Azure:
+The backend already logs one structured JSON line per event/request to stdout (`backend/services/logger.py`, `backend/main.py`) — every line, including per-request `http.request`/`http.request_failed` lines, now carries a `user_id` field (best-effort JWT `sub`, never used for authorization) — and exposes `GET /metrics` in Prometheus format. No extra setup needed to view raw logs on Azure:
 
 ```bash
-az containerapp logs show --name greenroom-backend --resource-group <your-rg> --follow
+az containerapp logs show --name greenroom-api --resource-group <your-rg> --follow
 ```
 
-Or in the portal: **Container Apps → greenroom-backend → Monitoring → Log stream**.
+Or in the portal: **Container Apps → greenroom-api → Monitoring → Log stream**.
 
-There is no Loki/Grafana wired up against the live deployment — the compose stack above is local dev only. If you want the same live-log-in-Grafana view for the deployed app, either point a hosted Grafana at Azure Monitor/Log Analytics (see `infra/monitoring.bicep` — drafted but not yet deployed; deploy via `infra/deploy-monitoring.sh` once its alert rules are updated to match the current Judge0 setup, not the retired Piston/Wandbox split), or ship container logs to a hosted Loki instance.
+**For the same live-log-in-Grafana view the local compose stack gives you** (including filtering to one candidate's session), the Loki/Promtail stack above does **not** work against the live deployment — Azure Container Apps has no Docker socket for Promtail to read, so it only ever sees local traffic. The real path:
+
+1. Deploy `infra/monitoring.bicep` (`infra/deploy-monitoring.sh --apply`) — this attaches (or reuses) a Log Analytics workspace, which Azure automatically starts forwarding Container Apps console logs into as `ContainerAppConsoleLogs_CL`.
+2. Provision the Azure Monitor Logs Grafana data source: copy `infra/grafana/provisioning/datasources/azure-monitor.yml.example` to `azure-monitor.yml`, fill in the subscription/tenant/app-registration/workspace values, restart Grafana.
+3. The "Live backend logs (production)" panel in the **Greenroom Backend** dashboard reads from that data source with a KQL query already wired to the dashboard's `$user_id` variable — paste a candidate's Supabase user id there to see just their session.
 
 ---
 

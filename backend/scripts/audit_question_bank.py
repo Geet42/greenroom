@@ -116,7 +116,7 @@ def classify_row(row: dict) -> dict:
         # REPAIRABLE reason, independent of schema validation — a question can
         # pass schema validation (has >=4 tests, function_name, etc.) yet still
         # be missing java/cpp boilerplate entirely.
-        never_attempted = [l for l, s in lang_status.items() if s == "never-attempted"]
+        never_attempted = [lang for lang, s in lang_status.items() if s == "never-attempted"]
         if never_attempted:
             if record["bucket"] == "OK":
                 record["bucket"] = "REPAIRABLE"
@@ -126,7 +126,7 @@ def classify_row(row: dict) -> dict:
         # Java/C++-only unsupported is NEVER a delete reason on its own — a
         # question usable in Python/JS is still a usable question. Only
         # note it, don't escalate the bucket.
-        unsupported = [l for l, s in lang_status.items() if s == "confirmed-unsupported"]
+        unsupported = [lang for lang, s in lang_status.items() if s == "confirmed-unsupported"]
         if unsupported:
             record["reasons"].append(f"confirmed-unsupported (already exhausted attempts): {', '.join(unsupported)}")
 

@@ -68,6 +68,11 @@ def _route_template(request: Request) -> str:
 @app.middleware("http")
 async def request_logger(request: Request, call_next):
     start = time.monotonic()
+    # Best-effort JWT `sub` extraction (see _unverified_user_id docstring —
+    # never used for authorization, only to tag every request/error log line
+    # so a candidate's activity can be found with `| json | user_id="..."`
+    # in Grafana/Loki once production logs actually reach it (see infra/).
+    user_id = _unverified_user_id(request)
     try:
         response = await call_next(request)
     except Exception as exc:
@@ -81,12 +86,12 @@ async def request_logger(request: Request, call_next):
             path=request.url.path,
             latency_ms=round(latency_s * 1000),
             error=str(exc),
+            user_id=user_id,
         )
         # Persisted (not just logged to stdout) so failures survive past the
         # container's log retention window and are queryable per-user — only
         # possible when the request carried a token, since analytics_events
         # requires a user_id.
-        user_id = _unverified_user_id(request)
         if user_id:
             try:
                 persist_analytics_event(
@@ -106,6 +111,7 @@ async def request_logger(request: Request, call_next):
         path=request.url.path,
         status=response.status_code,
         latency_ms=round(latency_s * 1000),
+        user_id=user_id,
     )
     return response
 

@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Baked into the image by infra/prometheus/Dockerfile for an Azure-deployed
+  # Prometheus instance — unlike prometheus.yml (used by docker-compose for
+  # local dev), this has no "backend:8000" local target, since that hostname
+  # doesn't resolve outside the compose network. Only the real deployed app.
+  - job_name: greenroom-backend-production
+    scheme: https
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io"]
+        labels:
+          env: production

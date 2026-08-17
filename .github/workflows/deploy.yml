@@ -10,10 +10,9 @@ env:
   GITHUB_USER: vishwajeetraut
   RESOURCE_GROUP: greenroom-rg
   API_APP: greenroom-api
-  PISTON_APP: greenroom-piston
   FRONTEND_APP: greenroom-frontend
-  FRONTEND_ORIGIN: https://greenroom-frontend.orangeground-05e56063.swedencentral.azurecontainerapps.io
-  PISTON_INTERNAL: http://greenroom-piston.internal.orangeground-05e56063.swedencentral.azurecontainerapps.io/api/v2/execute
+  FRONTEND_ORIGIN: https://greenroom-frontend.graybay-9c347e62.swedencentral.azurecontainerapps.io
+  API_ORIGIN: https://greenroom-api.graybay-9c347e62.swedencentral.azurecontainerapps.io
 
 jobs:
   build-and-deploy:
@@ -54,18 +53,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push piston image
-        uses: docker/build-push-action@v5
-        with:
-          context: piston
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:${{ steps.sha.outputs.short }}
-            ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Build and push frontend image
         uses: docker/build-push-action@v5
         with:
@@ -78,7 +65,7 @@ jobs:
           build-args: |
             VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
             VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
-            VITE_API_URL=https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io/api
+            VITE_API_URL=${{ env.API_ORIGIN }}/api
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -106,19 +93,11 @@ jobs:
                 FALLBACK_BASE_URL="${{ secrets.FALLBACK_BASE_URL }}" \
                 FALLBACK_API_KEY="${{ secrets.FALLBACK_API_KEY }}" \
                 FALLBACK_MODEL="${{ secrets.FALLBACK_MODEL }}" \
-                PISTON_URL="${{ env.PISTON_INTERNAL }}" \
+                AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+                AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+                AZURE_OPENAI_DEPLOYMENT="${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" \
+                AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}" \
                 ALLOWED_ORIGINS="${{ env.FRONTEND_ORIGIN }}" \
-              --output none
-
-      - name: Deploy piston
-        uses: azure/cli@v2
-        with:
-          azcliversion: latest
-          inlineScript: |
-            az containerapp update \
-              --name ${{ env.PISTON_APP }} \
-              --resource-group ${{ env.RESOURCE_GROUP }} \
-              --image ghcr.io/${{ env.GITHUB_USER }}/greenroom-piston:${{ steps.sha.outputs.short }} \
               --output none
 
       - name: Deploy frontend
@@ -137,4 +116,4 @@ jobs:
           echo "### Deployed commit \`${{ steps.sha.outputs.short }}\` to Azure" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: ${{ env.FRONTEND_ORIGIN }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend: https://greenroom-api.orangeground-05e56063.swedencentral.azurecontainerapps.io" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: ${{ env.API_ORIGIN }}" >> $GITHUB_STEP_SUMMARY
