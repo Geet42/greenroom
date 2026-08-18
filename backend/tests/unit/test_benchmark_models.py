@@ -4,6 +4,7 @@ every other one-off script in backend/scripts/, it has no test coverage
 beyond what's testable without hitting a live API."""
 import importlib.util
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -15,9 +16,19 @@ def benchmark_models():
     # Imported by path (not "from scripts import benchmark_models") since
     # scripts/ isn't a package and this module does network-touching imports
     # at call time only, not at import time — safe to load directly.
+    #
+    # It DOES call load_dotenv() against the real backend/.env at module
+    # level, though — patched to a no-op so this leaks nothing into the rest
+    # of the test process's os.environ. That leak was previously silent
+    # (every other test's rate-limit keys were non-UUID strings that always
+    # 22P02'd against Postgres and fell back to an in-memory check either
+    # way) until a syntactically-valid-UUID rate-limit key was introduced
+    # elsewhere and could actually round-trip against the real production
+    # database from a local test run.
     spec = importlib.util.spec_from_file_location("benchmark_models", _SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with patch("dotenv.load_dotenv"):
+        spec.loader.exec_module(module)
     return module
 
 

@@ -46,7 +46,14 @@ _PRUNE_AFTER_SECONDS = 300
 # (harmless here — worst case a couple of extra calls slip through in a
 # given minute, not a correctness issue for a soft protective throttle).
 GROQ_RPM_BUDGET = int(os.environ.get("GROQ_RPM_BUDGET", "24"))
-_GROQ_GLOBAL_KEY = "__groq_global_budget__"
+# rate_limit_events.user_id is a Postgres `uuid` column — a human-readable
+# sentinel string here 22P02's ("invalid input syntax for type uuid") on
+# every single check, silently degrading to the per-replica in-memory
+# fallback instead of the intended cross-replica counter (each replica then
+# enforces its own 24 RPM independently, letting the account-wide total run
+# well past Groq's real limit under multiple replicas). The nil UUID is
+# reserved and can never collide with a real user id.
+_GROQ_GLOBAL_KEY = "00000000-0000-0000-0000-000000000000"
 
 
 def groq_budget_available() -> bool:
