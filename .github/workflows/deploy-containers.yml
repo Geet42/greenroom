@@ -44,6 +44,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
     environment:
       name: production
       url: ${{ env.FRONTEND_ORIGIN }}
@@ -115,8 +116,12 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
+      # Genuinely non-blocking, matching the scan above: a future GitHub API
+      # hiccup or permissions regression here must never stop the actual
+      # deploy below it in the same job.
       - name: Upload backend scan results
         uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
         with:
           sarif_file: trivy-backend.sarif
           category: trivy-backend
