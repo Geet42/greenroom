@@ -4,7 +4,7 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from services.rate_limit import _buckets, check_rate_limit
+from services.rate_limit import _GROQ_GLOBAL_KEY, _buckets, check_rate_limit, groq_budget_available
 
 
 def _clear(key: str):
@@ -45,3 +45,37 @@ def test_different_users_are_independent():
         check_rate_limit("user-x", max_per_minute=5)
     # user-y hasn't used any quota
     check_rate_limit("user-y", max_per_minute=5)
+
+
+# ── groq_budget_available ────────────────────────────────────────────────────
+
+def test_groq_budget_available_under_limit(monkeypatch):
+    _clear(_GROQ_GLOBAL_KEY)
+    monkeypatch.setattr("services.rate_limit.GROQ_RPM_BUDGET", 3)
+    assert groq_budget_available() is True
+    assert groq_budget_available() is True
+    assert groq_budget_available() is True
+
+
+def test_groq_budget_unavailable_once_exhausted(monkeypatch):
+    _clear(_GROQ_GLOBAL_KEY)
+    monkeypatch.setattr("services.rate_limit.GROQ_RPM_BUDGET", 2)
+    assert groq_budget_available() is True
+    assert groq_budget_available() is True
+    # Third call this minute is over budget — should report unavailable
+    # rather than raising, so callers can fall back cleanly.
+    assert groq_budget_available() is False
+
+
+def test_groq_budget_is_shared_globally_not_per_caller():
+    """Unlike check_rate_limit's per-user keys, groq_budget_available has no
+    caller-supplied key — every call site (llm.py's two, guardrail.py's two)
+    draws from the same account-wide bucket, matching Groq's own limit being
+    per-account rather than per-user."""
+    _clear(_GROQ_GLOBAL_KEY)
+    bucket = _buckets[_GROQ_GLOBAL_KEY]
+    assert len(bucket) == 0
+    groq_budget_available()
+    assert len(bucket) == 1
+    groq_budget_available()
+    assert len(bucket) == 2

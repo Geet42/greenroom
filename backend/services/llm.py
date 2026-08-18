@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from services import guardrail, metrics
 from services.logger import log
+from services.rate_limit import groq_budget_available
 
 # ── env ──────────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
@@ -340,6 +341,26 @@ def opening_message(track: str, role: str) -> str:
     import time
     system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
     start = time.monotonic()
+
+    def _via_fallback(reason: str) -> str:
+        log.warning("llm.opening.fallback", track=track, error=reason)
+        metrics.record_fallback("interviewer")
+        with metrics.track_llm_call("ollama_fallback"):
+            result = _fallback_chat(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": "[The interview session is starting now.]"},
+                ],
+                max_tokens=120, temperature=0.9,
+            )
+        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="fallback")
+        return result
+
+    # Skip a Groq attempt we already know is very likely to 429 under load —
+    # see rate_limit.groq_budget_available's docstring for why.
+    if not groq_budget_available():
+        return _via_fallback("groq budget exhausted for this minute")
+
     try:
         llm_client = _make_llm(temperature=0.9, max_tokens=120)
         with metrics.track_llm_call("groq"):
@@ -353,18 +374,7 @@ def opening_message(track: str, role: str) -> str:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-            log.warning("llm.opening.fallback", track=track, error=str(exc))
-            metrics.record_fallback("interviewer")
-            with metrics.track_llm_call("ollama_fallback"):
-                result = _fallback_chat(
-                    [
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": "[The interview session is starting now.]"},
-                    ],
-                    max_tokens=120, temperature=0.9,
-                )
-            log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="fallback")
-            return result
+            return _via_fallback(str(exc))
         raise
 
 
@@ -450,6 +460,21 @@ def next_question(
         sys_prompt = system_prompt
         if corrective:
             sys_prompt += f"\n\nIMPORTANT: {corrective}"
+
+        def _via_fallback() -> str:
+            raw_msgs = [{"role": "system", "content": sys_prompt}]
+            for m in lc_history:
+                raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
+            raw_msgs.append({"role": "user", "content": last_turn})
+            metrics.record_fallback("interviewer")
+            with metrics.track_llm_call("ollama_fallback"):
+                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+
+        # Skip a Groq attempt we already know is very likely to 429 under
+        # load — see rate_limit.groq_budget_available's docstring for why.
+        if not groq_budget_available():
+            return _via_fallback()
+
         try:
             p = ChatPromptTemplate.from_messages([
                 ("system", sys_prompt),
@@ -462,13 +487,7 @@ def next_question(
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-                raw_msgs = [{"role": "system", "content": sys_prompt}]
-                for m in lc_history:
-                    raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
-                raw_msgs.append({"role": "user", "content": last_turn})
-                metrics.record_fallback("interviewer")
-                with metrics.track_llm_call("ollama_fallback"):
-                    return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+                return _via_fallback()
             raise
 
     import time as _time

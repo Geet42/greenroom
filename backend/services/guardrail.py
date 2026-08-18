@@ -26,6 +26,7 @@ import httpx
 
 from services import metrics
 from services.logger import log
+from services.rate_limit import groq_budget_available
 
 # Shared, reused across calls instead of a fresh httpx.post(...) (and
 # therefore a fresh DNS lookup + TLS handshake) every time — the guardrail's
@@ -101,6 +102,11 @@ def _llm_judge(text: str, track: str) -> bool:
     }
     prompt = prompts.get(track)
     if not prompt:
+        return False
+    # Skip a Groq attempt we already know is very likely to 429 under load —
+    # this layer already fails open, so budget exhaustion just means
+    # skipping the check for this message rather than a real failure.
+    if not groq_budget_available():
         return False
     try:
         with metrics.track_llm_call("groq"):
@@ -191,6 +197,11 @@ def _llm_judge_new_problem(text: str) -> bool:
         "up on a problem already given (discussing approach, complexity, trade-offs, scale, "
         "failure modes, etc.)? Reply YES or NO only.\n\n" + text
     )
+    # Skip a Groq attempt we already know is very likely to 429 under load —
+    # this layer already fails open, so budget exhaustion just means
+    # skipping the check for this message rather than a real failure.
+    if not groq_budget_available():
+        return False
     try:
         with metrics.track_llm_call("groq"):
             resp = _HTTP_CLIENT.post(

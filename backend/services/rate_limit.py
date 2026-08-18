@@ -18,6 +18,7 @@ credentials.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict, deque
 from threading import Lock
@@ -28,6 +29,42 @@ from services.logger import log
 
 _WINDOW_SECONDS = 60
 _PRUNE_AFTER_SECONDS = 300
+
+# ── Groq account-wide budget ──────────────────────────────────────────────────
+# Groq's own per-account rate limit (confirmed live against a 429 response
+# body: "Limit 30, Used 30" requests per minute) is shared across every call
+# this backend makes to it — the interviewer conversation (llm.py) AND the
+# guardrail's LLM judges (guardrail.py) all draw from the same 30 RPM pool,
+# across every replica. A 50-concurrent-user load test showed the problem
+# directly: each request tried Groq first regardless, so a large share of
+# attempts round-tripped to Groq just to get a 429 before falling back —
+# wasted latency under exactly the load where latency matters most.
+#
+# GROQ_RPM_BUDGET is set safely under the real 30 RPM ceiling (not AT it) so
+# this backend's own bookkeeping lands the account under its limit even
+# accounting for the small read-then-write race in _check_postgres below
+# (harmless here — worst case a couple of extra calls slip through in a
+# given minute, not a correctness issue for a soft protective throttle).
+GROQ_RPM_BUDGET = int(os.environ.get("GROQ_RPM_BUDGET", "24"))
+_GROQ_GLOBAL_KEY = "__groq_global_budget__"
+
+
+def groq_budget_available() -> bool:
+    """True if the shared Groq account still has budget this minute.
+    Callers should skip straight to their fallback path (Ollama in llm.py,
+    fail-open False in guardrail.py) on a False return, instead of making a
+    Groq call that's very likely to just 429. Uses the same cross-replica
+    Postgres-backed counter as check_rate_limit, keyed globally instead of
+    per-user. Fails open (True) if the check itself errors — a real 429 from
+    Groq remains the ultimate safety net either way."""
+    try:
+        check_rate_limit(_GROQ_GLOBAL_KEY, max_per_minute=GROQ_RPM_BUDGET)
+        return True
+    except HTTPException:
+        return False
+    except Exception as exc:
+        log.error("rate_limit.groq_budget_check_failed", error=str(exc))
+        return True
 
 
 def check_rate_limit(key: str, max_per_minute: int = 30) -> None:
