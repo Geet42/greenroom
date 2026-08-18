@@ -3,7 +3,7 @@
   "uid": "greenroom-backend",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 4,
+  "version": 5,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -962,7 +962,7 @@
       ]
     },
     {
-      "id": 32,
+      "id": 33,
       "title": "Live backend logs (production)",
       "type": "logs",
       "description": "Reads real candidate traffic from Azure Monitor Log Analytics (ContainerAppConsoleLogs_CL) — this is the panel that actually shows production data, unlike the Loki panels above which only ever see local Docker traffic. Requires: (1) infra/monitoring.bicep deployed (infra/deploy-monitoring.sh --apply) so the Container App's console logs flow into the Log Analytics workspace, and (2) the 'Azure Monitor Logs' data source provisioned per infra/grafana/provisioning/datasources/azure-monitor.yml.example — copy it, fill in your subscriptionId/tenantId/clientId/clientSecret and Log Analytics workspace GUID (from `az monitor log-analytics workspace show`), and remove the .example suffix so Grafana picks it up on next restart. Set the $user_id variable above to filter to one candidate. Shows \"Data source not found\" until provisioned — that's expected, not a bug.",
