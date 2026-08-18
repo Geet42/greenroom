@@ -3,7 +3,7 @@
   "uid": "greenroom-backend",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 5,
+  "version": 6,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -986,6 +986,7 @@
         {
           "queryType": "Azure Log Analytics",
           "azureLogAnalytics": {
+            "resources": ["/subscriptions/97add425-254c-4d31-9947-c470469e8ad1/resourceGroups/greenroom-rg/providers/Microsoft.OperationalInsights/workspaces/workspace-greenroomrgzq9C"],
             "query": "ContainerAppConsoleLogs_CL\n| where ContainerAppName_s == \"greenroom-api\"\n| extend parsed = parse_json(Log_s)\n| where isempty('$user_id') or tostring(parsed.user_id) == '$user_id'\n| project TimeGenerated, Log_s\n| order by TimeGenerated desc",
             "resultFormat": "logs"
           },
