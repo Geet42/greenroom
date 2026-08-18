@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from functools import lru_cache
 from typing import List
 
 import httpx
@@ -44,6 +45,12 @@ EVAL_SELF_CRITIQUE_ENABLED = os.environ.get("EVAL_SELF_CRITIQUE_ENABLED", "true"
 # indistinguishable from the report generator being stuck. These fail fast
 # into the existing fallback/error path instead.
 LLM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS", "45"))
+
+# Shared, reused across calls instead of a fresh httpx.post(...) (and
+# therefore a fresh DNS lookup + TLS handshake) per fallback call — see the
+# _make_llm cache note below for the same reasoning, evidenced by a
+# concurrent load test.
+_FALLBACK_HTTP_CLIENT = httpx.Client()
 # Azure's gpt-5-mini is a reasoning model — even with reasoning_effort="minimal"
 # it can legitimately take longer than a plain chat completion, so this gets
 # more headroom than the Groq timeout above rather than sharing one value.
@@ -91,6 +98,18 @@ class EvaluationResult(BaseModel):
 
 # ── LangChain LLM (with Groq) ────────────────────────────────────────────────
 
+# lru_cache reuses one ChatGroq/AzureChatOpenAI client (and its underlying
+# pooled HTTP connection) per distinct (temperature, max_tokens) combo —
+# there are only a handful of these across the whole file — instead of
+# constructing a brand-new client, and therefore a brand-new unpooled HTTP
+# connection, on every single call. Under concurrent load this mattered: a
+# 50-concurrent-user k6 run against production produced repeated
+# "[Errno -5] No address associated with hostname" failures on /start and
+# /message — each request opening its own fresh DNS lookup + TLS handshake
+# to api.groq.com, all at once, overwhelmed the container's resolver.
+# Exceptions (e.g. missing API key) are never cached — lru_cache only caches
+# successful returns.
+@lru_cache(maxsize=8)
 def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not set.")
@@ -103,6 +122,7 @@ def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
     )
 
 
+@lru_cache(maxsize=8)
 def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureChatOpenAI:
     """Evaluation-only LLM (Azure OpenAI gpt-5-mini). Used by evaluate_session,
     _self_critique, and evaluate_diagram — nowhere else.
@@ -115,7 +135,9 @@ def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureCha
     request errors out). `reasoning_effort="minimal"` disables that hidden
     pass so the existing token budgets (tuned for Groq's plain chat model)
     keep working unchanged. `temperature` is accepted for call-site
-    compatibility with `_make_llm` but not forwarded."""
+    compatibility with `_make_llm` but not forwarded.
+
+    See _make_llm's cache note above — same reasoning applies here."""
     if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
         raise RuntimeError("Azure OpenAI is not configured (AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT missing).")
     return AzureChatOpenAI(
@@ -142,7 +164,7 @@ def _fallback_chat(messages: list[dict], max_tokens: int, temperature: float, js
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
-    resp = httpx.post(
+    resp = _FALLBACK_HTTP_CLIENT.post(
         f"{FALLBACK_BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {FALLBACK_API_KEY}", "Content-Type": "application/json"},
         json=payload,

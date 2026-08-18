@@ -22,8 +22,17 @@ import os
 import random
 import re
 
+import httpx
+
 from services import metrics
 from services.logger import log
+
+# Shared, reused across calls instead of a fresh httpx.post(...) (and
+# therefore a fresh DNS lookup + TLS handshake) every time — the guardrail's
+# LLM judge runs on every candidate message. A 50-concurrent-user load test
+# against production surfaced "[Errno -5] No address associated with
+# hostname" failures under exactly this kind of connection-per-call pattern.
+_HTTP_CLIENT = httpx.Client()
 
 _COMPLEXITY_PATTERNS = [
     re.compile(r"O\(\s*[a-zA-Z0-9log\s\*\+\^,]+\s*\)"),
@@ -94,9 +103,8 @@ def _llm_judge(text: str, track: str) -> bool:
     if not prompt:
         return False
     try:
-        import httpx
         with metrics.track_llm_call("groq"):
-            resp = httpx.post(
+            resp = _HTTP_CLIENT.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
@@ -184,9 +192,8 @@ def _llm_judge_new_problem(text: str) -> bool:
         "failure modes, etc.)? Reply YES or NO only.\n\n" + text
     )
     try:
-        import httpx
         with metrics.track_llm_call("groq"):
-            resp = httpx.post(
+            resp = _HTTP_CLIENT.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={

@@ -91,7 +91,7 @@ def test_llm_judge_returns_false_when_no_api_key(monkeypatch):
 
 def test_llm_judge_fails_open_on_network_error(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
-    with patch("httpx.post", side_effect=Exception("connection refused")):
+    with patch("services.guardrail._HTTP_CLIENT.post", side_effect=Exception("connection refused")):
         assert _llm_judge("Some text", "technical") is False
 
 
@@ -101,7 +101,7 @@ def test_llm_judge_detects_leak_via_yes_response(monkeypatch):
         "raise_for_status": lambda self: None,
         "json": lambda self: {"choices": [{"message": {"content": "YES"}}]},
     })()
-    with patch("httpx.post", return_value=mock_response):
+    with patch("services.guardrail._HTTP_CLIENT.post", return_value=mock_response):
         assert _llm_judge("Some novel phrasing that means linear time", "technical") is True
 
 
@@ -111,7 +111,7 @@ def test_llm_judge_passes_clean_via_no_response(monkeypatch):
         "raise_for_status": lambda self: None,
         "json": lambda self: {"choices": [{"message": {"content": "NO"}}]},
     })()
-    with patch("httpx.post", return_value=mock_response):
+    with patch("services.guardrail._HTTP_CLIENT.post", return_value=mock_response):
         assert _llm_judge("What do you think the complexity is?", "technical") is False
 
 
@@ -132,6 +132,6 @@ def test_sanitize_triggers_regen_on_llm_judge_hit(monkeypatch):
         return mock_yes if call_count["n"] == 1 else mock_no
 
     good = "What is the efficiency of your solution?"
-    with patch("httpx.post", side_effect=fake_post):
+    with patch("services.guardrail._HTTP_CLIENT.post", side_effect=fake_post):
         result = sanitize("This runs efficiently in linear time", "technical", regenerate_fn=lambda: good)
     assert result == good
