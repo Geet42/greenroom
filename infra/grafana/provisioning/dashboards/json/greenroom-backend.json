@@ -827,7 +827,45 @@
           "legendFormat": "{{le}}",
           "refId": "A"
         }
-      ]
+      ],
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "short",
+          "min": "0",
+          "max": "10",
+          "decimals": 0
+        },
+        "rowsFrame": {
+          "layout": "le"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Spectral",
+          "exponent": 0.5,
+          "steps": 64
+        },
+        "cellGap": 1,
+        "filterValues": {
+          "le": 1e-9
+        },
+        "tooltip": {
+          "show": true,
+          "yHistogram": false
+        },
+        "legend": {
+          "show": true
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 105,
