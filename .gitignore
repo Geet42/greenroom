@@ -18,3 +18,8 @@ backend/scripts/_*.json
 # k6 load-test throwaway-account tokens (live bearer tokens, ~1h lifetime) —
 # regenerated locally via stress/fetch_stress_tokens.py, never source of truth
 stress/tokens.json
+
+# Grafana data source credentials filled in from the .yml.example templates —
+# real Azure/Supabase secrets, never source of truth
+infra/grafana/provisioning/datasources/azure-monitor.yml
+infra/grafana/provisioning/datasources/supabase-postgres.yml
