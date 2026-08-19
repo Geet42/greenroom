@@ -37,10 +37,19 @@ jobs:
     # and failed runs. Only proceed for a successful run that was itself
     # triggered by a push to main; a PR's CI run (event: pull_request) must
     # never deploy, and a failed CI run must never deploy.
+    #
+    # Also gated to the canonical repo: forks (e.g. a contributor's own
+    # Geet42/greenroom) run this same workflow file on their own pushes to
+    # their own main, but their GITHUB_TOKEN has no access to
+    # vishwajeetraut's GHCR namespace or Azure resources — every push/deploy
+    # step would fail with permission_denied. Skip it there instead of
+    # burning a red X on every fork push for a deploy that was never going
+    # to succeed.
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+      github.repository == 'VishwajeetRaut/greenroom' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
     permissions:
       contents: read
       packages: write
