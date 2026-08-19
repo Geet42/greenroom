@@ -11,7 +11,6 @@ skinparam componentStyle rectangle
 skinparam linetype ortho
 skinparam nodesep 48
 skinparam ranksep 65
-skinparam padding 5
 skinparam roundcorner 6
 skinparam defaultTextAlignment center
 skinparam ArrowColor #55606B
@@ -52,7 +51,7 @@ package "GitHub" #EDE1F7 {
 }
 
 package "Supabase Cloud" #D7E9FA {
-  component "Supabase Auth\nPKCE · JWT issuer" as supaauth
+  component "Supabase Auth\nJWT issuer" as supaauth
   database "Postgres + RLS\nsessions · messages · evaluations\nquestions · analytics_events" as supadb
 }
 
@@ -74,8 +73,6 @@ package "Azure Container Apps  ·  Private VNet  ·  OIDC CI/CD" #F2FAF3 {
       component "Harness Generator\nbank Qs · sandbox-verified" as harnessgen
       component "Ad-hoc Harness Generator\ninterviewer-invented problems" as adhocharness
     }
-
-    component "Analytics / Telemetry\nevent ingestion" as analytics
   }
 }
 
@@ -107,7 +104,7 @@ candidate -down-> frontend : HTTPS
 frontend -up-> supaauth : PKCE login
 frontend -down-> apigateway : /api/* · Bearer JWT
 apigateway -up-> supaauth : validate JWT
-apigateway -up-> supadb : session/ownership reads · svc-role key
+apigateway -up-> supadb : session/message/eval reads & writes
 
 apigateway -down-> llmorchestrator
 apigateway -down-> ttsservice
@@ -127,8 +124,6 @@ codeexec -down-> harnessgen : get harness
 codeexec -down-> adhocharness : get harness
 codeexec -right-> judge0public : execute
 judge0public -down-> judge0rapid : fallback
-
-analytics -up-> supadb : background write
 
 ghactions -down-> frontend : deploy
 

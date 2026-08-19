@@ -7,6 +7,21 @@ count; anything that genuinely can't be measured yet (it needs data we don't
 have) is labeled **not yet measurable** rather than given a placeholder
 number.
 
+**2026-08-19 note — several §7 gaps are now instrumented, but not re-pulled
+into this document.** Since this file was last written, `services/metrics.py`
+(added `0797d6c`, 2026-08-14) added Prometheus counters/histograms for LLM
+provider latency and error rate, fallback triggers, token usage and cost
+(against `data/model_rates.json`), guardrail leak detections, and
+code-execution outcomes/latency — closing the instrumentation gap behind
+most of §7's "not yet measurable" rows below. The Grafana dashboard
+(`dfa3e42` et seq.) now also has a dedicated AI/LLM pipeline section and a
+production Azure Monitor log panel. None of this has been used yet to pull a
+real report or update the numbers in this document — the session-volume,
+score-distribution, and guardrail-comparison sections below are still the
+2026-07-30 snapshot and have not been re-measured against current data. Refer
+to `DESIGN.md` §6 (Observability) for what's live today; treat every number
+below as historical unless re-verified.
+
 **2026-07-30 update — evaluation reliability gap closed.** The 47.7%
 missing-score bug described below (§2) has been root-caused and fixed:
 `evaluate_session()`'s JSON parser (`JsonOutputParser`) only used the
@@ -280,21 +295,30 @@ exactly why Greenroom's sandbox-verification step exists.
 | Cross-user session access blocked | Yes (`check_ownership`, 403) | None |
 | One-problem containment (technical/system-design) | Yes — guardrail-enforced | None |
 
-## 7. Operational metrics — not yet measurable
+## 7. Operational metrics — not yet measurable (as of 2026-07-30; see the 2026-08-19 note at the top of this file)
 
-These need instrumentation that doesn't exist yet, listed honestly rather
-than estimated:
+These needed instrumentation that didn't exist as of 2026-07-30, listed
+honestly rather than estimated. As of 2026-08-19 the instrumentation itself
+now exists (`services/metrics.py`, Prometheus + Grafana) for the first three
+rows below — nobody has yet pulled a real number out of it into this
+document, so they're left as "not yet measurable" here rather than guessed:
 
 - **P50/P95 response latency** — `structlog` logs latency per request to
-  stdout only; nothing is persisted anywhere aggregatable yet.
-- **LLM fallback rate** (Groq → Ollama) — not currently logged as a
-  countable event. (Known qualitatively: Groq hit its daily token quota
-  during this week's work, confirmed directly.)
-- **Cost per completed session** — no token-usage tracking wired up.
-- **Piston vs Wandbox execution split** — logged per-request but not
-  aggregated anywhere queryable; the self-hosted Piston sandbox has been
-  unreachable for the entirety of this week's local testing, with every
-  real execution falling through to Wandbox.
+  stdout only as of this writing; nothing was persisted anywhere
+  aggregatable at the time. (Now exposed as a Prometheus histogram; not yet
+  reported here.)
+- **LLM fallback rate** (Groq → Ollama) — not logged as a countable event as
+  of this writing. (Known qualitatively: Groq hit its daily token quota
+  during this week's work, confirmed directly. Now exposed as a Prometheus
+  counter; not yet reported here.)
+- **Cost per completed session** — no token-usage tracking was wired up as
+  of this writing. (Now tracked per LLM call against `data/model_rates.json`
+  where a rate is configured; not yet reported here.)
+- **Judge0 execution-tier split** (public / RapidAPI / local subprocess —
+  the execution backend changed from self-hosted Piston + Wandbox to Judge0
+  on 2026-08-03, after this section was originally written) — logged
+  per-request via `services/metrics.py` but not yet surfaced as a Grafana
+  panel or aggregated into a report.
 
 ## What to build next, in order of cheapest-to-answer
 
@@ -304,11 +328,16 @@ than estimated:
 2. **Verify system-design and behavioral now actually work end-to-end** now
    that questions are live — they have effectively never run against real
    candidates before today.
-3. **Add a logged event for guardrail triggers and LLM fallback** — both are
-   one line of code at the point they already happen; today they leave no
-   trace.
-4. **Persist structured logs somewhere queryable** (even just a Supabase
-   table) to make latency/cost numbers derivable without more instrumentation.
+3. ~~Add a logged event for guardrail triggers and LLM fallback~~ — **done,
+   2026-08-14** (`0797d6c`): `services/metrics.py` adds Prometheus counters
+   for both, instrumented into `llm.py`/`guardrail.py`. No trend report has
+   been pulled from them into this document yet.
+4. ~~Persist structured logs somewhere queryable~~ — **partially done**:
+   Prometheus/Grafana (`bdce9f9`, `dfa3e42`) now gives queryable latency/
+   error/cost metrics, and production application logs are queryable via
+   Azure Monitor Log Analytics from the same dashboard. A Supabase table of
+   raw structured log rows, if still wanted for ad-hoc SQL analysis, hasn't
+   been built.
 5. **Human-vs-bot score correlation study** — the most valuable metric here,
    and the slowest: needs 30+ real transcripts double-scored by experienced
    interviewers.
