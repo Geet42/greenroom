@@ -17,13 +17,23 @@ const BASE = "https://greenroom-api.graybay-9c347e62.swedencentral.azurecontaine
 // fetch_stress_tokens.py first.
 const tokens = JSON.parse(open("./tokens.json"));
 
+// per-vu-iterations, 1 iteration each: models the actual scenario asked
+// for — 50 people each starting one interview at roughly the same time —
+// rather than a sustained hammering test. The old ramping-vus executor
+// loops the default function repeatedly for the whole test window, so a
+// VU that fails fast just immediately starts a brand-new "interview,"
+// turning 50 concurrent people into 50 people each attempting a dozen+
+// interviews back-to-back for 90 seconds straight — a much harsher,
+// unrealistic load pattern that says nothing about the real question.
 export const options = {
-  stages: [
-    { duration: "20s", target: 5  },   // warm up
-    { duration: "30s", target: 20 },   // ramp to 20 concurrent users
-    { duration: "20s", target: 50 },   // spike to 50
-    { duration: "20s", target: 0  },   // ramp down
-  ],
+  scenarios: {
+    fifty_concurrent_interviews: {
+      executor: "per-vu-iterations",
+      vus: 50,
+      iterations: 1,
+      maxDuration: "2m",
+    },
+  },
   thresholds: {
     http_req_failed:   ["rate<0.10"],   // less than 10% failures
     http_req_duration: ["p(95)<8000"],  // 95% under 8s
