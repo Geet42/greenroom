@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from services import guardrail, metrics
 from services.logger import log
-from services.rate_limit import groq_budget_available
+from services.rate_limit import azure_budget_available, groq_budget_available
 
 # ── env ──────────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
@@ -342,31 +342,51 @@ def opening_message(track: str, role: str) -> str:
     system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
     start = time.monotonic()
 
-    def _via_fallback(reason: str) -> str:
-        # Azure OpenAI, not Ollama-cloud — paid, and already proven reliable
-        # under load (it's the primary provider for evaluation). A 50-
-        # concurrent-user load test showed Ollama-cloud's free endpoint
-        # failing with DNS errors when many requests hit it at once (a burst
-        # of genuinely new connections simultaneously, not something
-        # client-side connection pooling alone fixes); Azure's paid
-        # infrastructure doesn't have that problem. Real cost is tiny — see
-        # the estimate that shipped alongside this change.
+    def _via_ollama(reason: str) -> str:
+        # Last resort — only reached when BOTH Groq and Azure OpenAI are
+        # unavailable/over budget. Ollama-cloud's free endpoint proved flaky
+        # under concurrent bursts (DNS errors), but at this point it's
+        # better than failing the request outright.
+        log.warning("llm.opening.fallback.ollama_last_resort", track=track, error=reason)
+        with metrics.track_llm_call("ollama_fallback"):
+            result = _fallback_chat(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": "[The interview session is starting now.]"},
+                ],
+                max_tokens=120, temperature=0.9,
+            )
+        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
+        return result
+
+    def _via_azure(reason: str) -> str:
+        # Azure OpenAI — paid, and already proven reliable under load (it's
+        # the primary provider for evaluation). Real cost is tiny — see the
+        # estimate that shipped alongside this change. Budget-gated the same
+        # way Groq is, since Azure's own deployment has a hard 100 RPM /
+        # 100K TPM ceiling (confirmed via `az cognitiveservices account
+        # deployment show`) shared with evaluation + self-critique traffic.
         log.warning("llm.opening.fallback", track=track, error=reason)
-        metrics.record_fallback("interviewer")
-        with metrics.track_llm_call("azure_openai_fallback"):
-            azure_client = _make_azure_llm(max_tokens=200)
-            result = azure_client.invoke([
-                SystemMessage(content=system),
-                HumanMessage(content="[The interview session is starting now.]"),
-            ])
-        metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
-        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="azure_fallback")
-        return result.content.strip()
+        if not azure_budget_available():
+            return _via_ollama("azure budget exhausted for this minute")
+        try:
+            with metrics.track_llm_call("azure_openai_fallback"):
+                azure_client = _make_azure_llm(max_tokens=200)
+                result = azure_client.invoke([
+                    SystemMessage(content=system),
+                    HumanMessage(content="[The interview session is starting now.]"),
+                ])
+            metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
+            log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="azure_fallback")
+            return result.content.strip()
+        except Exception as exc:
+            return _via_ollama(str(exc))
 
     # Skip a Groq attempt we already know is very likely to 429 under load —
     # see rate_limit.groq_budget_available's docstring for why.
     if not groq_budget_available():
-        return _via_fallback("groq budget exhausted for this minute")
+        metrics.record_fallback("interviewer")
+        return _via_azure("groq budget exhausted for this minute")
 
     try:
         llm_client = _make_llm(temperature=0.9, max_tokens=120)
@@ -381,7 +401,8 @@ def opening_message(track: str, role: str) -> str:
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-            return _via_fallback(str(exc))
+            metrics.record_fallback("interviewer")
+            return _via_azure(str(exc))
         raise
 
 
@@ -468,24 +489,40 @@ def next_question(
         if corrective:
             sys_prompt += f"\n\nIMPORTANT: {corrective}"
 
-        def _via_fallback() -> str:
-            # Azure OpenAI, not Ollama-cloud — see opening_message's
-            # _via_fallback for why.
-            metrics.record_fallback("interviewer")
-            with metrics.track_llm_call("azure_openai_fallback"):
-                azure_client = _make_azure_llm(max_tokens=250)
-                result = azure_client.invoke([
-                    SystemMessage(content=sys_prompt),
-                    *lc_history,
-                    HumanMessage(content=last_turn),
-                ])
-            metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
-            return result.content.strip()
+        def _via_ollama() -> str:
+            # Last resort — only reached when BOTH Groq and Azure OpenAI are
+            # unavailable/over budget. See opening_message's _via_ollama for
+            # why this exists as a third tier rather than failing outright.
+            raw_msgs = [{"role": "system", "content": sys_prompt}]
+            for m in lc_history:
+                raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
+            raw_msgs.append({"role": "user", "content": last_turn})
+            with metrics.track_llm_call("ollama_fallback"):
+                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+
+        def _via_azure() -> str:
+            # Azure OpenAI — see opening_message's _via_azure for why, and
+            # why it's budget-gated the same way Groq is.
+            if not azure_budget_available():
+                return _via_ollama()
+            try:
+                with metrics.track_llm_call("azure_openai_fallback"):
+                    azure_client = _make_azure_llm(max_tokens=250)
+                    result = azure_client.invoke([
+                        SystemMessage(content=sys_prompt),
+                        *lc_history,
+                        HumanMessage(content=last_turn),
+                    ])
+                metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
+                return result.content.strip()
+            except Exception:
+                return _via_ollama()
 
         # Skip a Groq attempt we already know is very likely to 429 under
         # load — see rate_limit.groq_budget_available's docstring for why.
         if not groq_budget_available():
-            return _via_fallback()
+            metrics.record_fallback("interviewer")
+            return _via_azure()
 
         try:
             p = ChatPromptTemplate.from_messages([
@@ -499,7 +536,8 @@ def next_question(
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             if status is None or status == 429 or (isinstance(status, int) and status >= 500):
-                return _via_fallback()
+                metrics.record_fallback("interviewer")
+                return _via_azure()
             raise
 
     import time as _time

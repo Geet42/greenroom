@@ -4,7 +4,14 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from services.rate_limit import _GROQ_GLOBAL_KEY, _buckets, check_rate_limit, groq_budget_available
+from services.rate_limit import (
+    _AZURE_GLOBAL_KEY,
+    _GROQ_GLOBAL_KEY,
+    _buckets,
+    azure_budget_available,
+    check_rate_limit,
+    groq_budget_available,
+)
 
 
 def _clear(key: str):
@@ -79,3 +86,40 @@ def test_groq_budget_is_shared_globally_not_per_caller():
     assert len(bucket) == 1
     groq_budget_available()
     assert len(bucket) == 2
+
+
+# ── azure_budget_available ───────────────────────────────────────────────────
+# Same mechanism as groq_budget_available (both delegate to the shared
+# _provider_budget_available helper) — covered separately so a regression in
+# one provider's budget doesn't silently mask a break in the other's, and to
+# confirm the two providers' buckets are genuinely independent (they're used
+# to gate a real fallback chain: Groq -> Azure -> Ollama, and if Azure's
+# budget were accidentally shared with Groq's key, exhausting one would
+# incorrectly block the other).
+
+def test_azure_budget_available_under_limit(monkeypatch):
+    _clear(_AZURE_GLOBAL_KEY)
+    monkeypatch.setattr("services.rate_limit.AZURE_RPM_BUDGET", 3)
+    assert azure_budget_available() is True
+    assert azure_budget_available() is True
+    assert azure_budget_available() is True
+
+
+def test_azure_budget_unavailable_once_exhausted(monkeypatch):
+    _clear(_AZURE_GLOBAL_KEY)
+    monkeypatch.setattr("services.rate_limit.AZURE_RPM_BUDGET", 2)
+    assert azure_budget_available() is True
+    assert azure_budget_available() is True
+    assert azure_budget_available() is False
+
+
+def test_groq_and_azure_budgets_are_independent(monkeypatch):
+    _clear(_GROQ_GLOBAL_KEY)
+    _clear(_AZURE_GLOBAL_KEY)
+    monkeypatch.setattr("services.rate_limit.GROQ_RPM_BUDGET", 1)
+    monkeypatch.setattr("services.rate_limit.AZURE_RPM_BUDGET", 1)
+    assert groq_budget_available() is True
+    assert groq_budget_available() is False
+    # Azure's budget is untouched by Groq's being exhausted.
+    assert azure_budget_available() is True
+    assert azure_budget_available() is False

@@ -20,8 +20,9 @@ from prometheus_client import Counter, Histogram
 # ── LLM provider calls ──────────────────────────────────────────────────────
 # provider values in use: "groq" (live conversation, primary), "azure_openai"
 # (evaluation, primary), "azure_openai_fallback" (live conversation, when
-# Groq is over budget or failing), "ollama_fallback" (evaluation only, when
-# Azure OpenAI itself fails)
+# Groq is over budget or failing), "ollama_fallback" (last resort for BOTH
+# live conversation and evaluation, only reached when the relevant primary
+# AND Azure OpenAI are both over budget/failing at once)
 
 LLM_PROVIDER_REQUESTS = Counter(
     "llm_provider_requests_total", "LLM calls by provider and outcome",

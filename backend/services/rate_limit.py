@@ -30,48 +30,65 @@ from services.logger import log
 _WINDOW_SECONDS = 60
 _PRUNE_AFTER_SECONDS = 300
 
-# ── Groq account-wide budget ──────────────────────────────────────────────────
-# Groq's own per-account rate limit (confirmed live against a 429 response
-# body: "Limit 30, Used 30" requests per minute) is shared across every call
-# this backend makes to it — the interviewer conversation (llm.py) AND the
-# guardrail's LLM judges (guardrail.py) all draw from the same 30 RPM pool,
-# across every replica. A 50-concurrent-user load test showed the problem
-# directly: each request tried Groq first regardless, so a large share of
-# attempts round-tripped to Groq just to get a 429 before falling back —
-# wasted latency under exactly the load where latency matters most.
+# ── Provider account-wide budgets ─────────────────────────────────────────────
+# Both Groq and Azure OpenAI have a hard, per-account/deployment rate limit
+# shared across every call this backend makes to them — regardless of which
+# code path (interviewer conversation, guardrail's LLM judges, evaluation,
+# self-critique) triggered the call, and across every replica. A 50-
+# concurrent-user load test showed both ceilings directly: Groq confirmed
+# live via a 429 body ("Limit 30, Used 30" requests/minute); Azure OpenAI's
+# real configured limit was read straight from the deployment itself
+# (`az cognitiveservices account deployment show`): 100 requests/minute,
+# 100,000 tokens/minute on the GlobalStandard SKU. Checking a budget before
+# attempting a call — rather than discovering the limit via a 429 — avoids
+# wasting latency on a request that's very likely to fail anyway, exactly
+# when latency matters most.
 #
-# GROQ_RPM_BUDGET is set safely under the real 30 RPM ceiling (not AT it) so
-# this backend's own bookkeeping lands the account under its limit even
-# accounting for the small read-then-write race in _check_postgres below
-# (harmless here — worst case a couple of extra calls slip through in a
-# given minute, not a correctness issue for a soft protective throttle).
+# Each *_RPM_BUDGET is set safely under the provider's real ceiling (not AT
+# it) so this backend's own bookkeeping lands the account under its limit
+# even accounting for the small read-then-write race in _check_postgres
+# below (harmless here — worst case a couple of extra calls slip through in
+# a given minute, not a correctness issue for a soft protective throttle).
 GROQ_RPM_BUDGET = int(os.environ.get("GROQ_RPM_BUDGET", "24"))
+# Azure's 100 RPM is shared with evaluation + self-critique traffic too, not
+# just the live-conversation fallback, so this leaves more headroom
+# (proportionally) than Groq's budget does.
+AZURE_RPM_BUDGET = int(os.environ.get("AZURE_RPM_BUDGET", "70"))
+
 # rate_limit_events.user_id is a Postgres `uuid` column — a human-readable
 # sentinel string here 22P02's ("invalid input syntax for type uuid") on
 # every single check, silently degrading to the per-replica in-memory
 # fallback instead of the intended cross-replica counter (each replica then
-# enforces its own 24 RPM independently, letting the account-wide total run
-# well past Groq's real limit under multiple replicas). The nil UUID is
-# reserved and can never collide with a real user id.
+# enforces its own budget independently, letting the account-wide total run
+# well past the provider's real limit under multiple replicas). These nil-
+# like UUIDs are reserved and can never collide with a real user id.
 _GROQ_GLOBAL_KEY = "00000000-0000-0000-0000-000000000000"
+_AZURE_GLOBAL_KEY = "00000000-0000-0000-0000-000000000001"
 
 
-def groq_budget_available() -> bool:
-    """True if the shared Groq account still has budget this minute.
-    Callers should skip straight to their fallback path (Ollama in llm.py,
-    fail-open False in guardrail.py) on a False return, instead of making a
-    Groq call that's very likely to just 429. Uses the same cross-replica
-    Postgres-backed counter as check_rate_limit, keyed globally instead of
-    per-user. Fails open (True) if the check itself errors — a real 429 from
-    Groq remains the ultimate safety net either way."""
+def _provider_budget_available(key: str, max_per_minute: int, label: str) -> bool:
+    """True if the shared provider account still has budget this minute.
+    Callers should skip straight to their fallback path on a False return,
+    instead of making a call very likely to just 429. Uses the same cross-
+    replica Postgres-backed counter as check_rate_limit, keyed globally
+    instead of per-user. Fails open (True) if the check itself errors — a
+    real 429 from the provider remains the ultimate safety net either way."""
     try:
-        check_rate_limit(_GROQ_GLOBAL_KEY, max_per_minute=GROQ_RPM_BUDGET)
+        check_rate_limit(key, max_per_minute=max_per_minute)
         return True
     except HTTPException:
         return False
     except Exception as exc:
-        log.error("rate_limit.groq_budget_check_failed", error=str(exc))
+        log.error(f"rate_limit.{label}_budget_check_failed", error=str(exc))
         return True
+
+
+def groq_budget_available() -> bool:
+    return _provider_budget_available(_GROQ_GLOBAL_KEY, GROQ_RPM_BUDGET, "groq")
+
+
+def azure_budget_available() -> bool:
+    return _provider_budget_available(_AZURE_GLOBAL_KEY, AZURE_RPM_BUDGET, "azure")
 
 
 def check_rate_limit(key: str, max_per_minute: int = 30) -> None:
