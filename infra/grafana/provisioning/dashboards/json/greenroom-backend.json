@@ -3,7 +3,7 @@
   "uid": "greenroom-backend",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 9,
+  "version": 10,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -463,7 +463,7 @@
       "id": 22,
       "title": "LLM provider request rate (success vs error)",
       "type": "timeseries",
-      "description": "One series per (provider, outcome) — groq and azure_openai are primary calls; ollama_fallback only fires when a primary call already failed. A flat line at 0 means no calls in this window yet, not that data is missing.",
+      "description": "One series per (provider, outcome) — groq and azure_openai are primary calls (live conversation and evaluation respectively). azure_openai_fallback fires when Groq is over budget/failing during live conversation; ollama_fallback only fires when Azure OpenAI itself fails during evaluation. A flat line at 0 means no calls in this window yet, not that data is missing.",
       "gridPos": {
         "h": 8,
         "w": 12,

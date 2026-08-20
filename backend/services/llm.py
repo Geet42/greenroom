@@ -343,18 +343,25 @@ def opening_message(track: str, role: str) -> str:
     start = time.monotonic()
 
     def _via_fallback(reason: str) -> str:
+        # Azure OpenAI, not Ollama-cloud — paid, and already proven reliable
+        # under load (it's the primary provider for evaluation). A 50-
+        # concurrent-user load test showed Ollama-cloud's free endpoint
+        # failing with DNS errors when many requests hit it at once (a burst
+        # of genuinely new connections simultaneously, not something
+        # client-side connection pooling alone fixes); Azure's paid
+        # infrastructure doesn't have that problem. Real cost is tiny — see
+        # the estimate that shipped alongside this change.
         log.warning("llm.opening.fallback", track=track, error=reason)
         metrics.record_fallback("interviewer")
-        with metrics.track_llm_call("ollama_fallback"):
-            result = _fallback_chat(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": "[The interview session is starting now.]"},
-                ],
-                max_tokens=120, temperature=0.9,
-            )
-        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="fallback")
-        return result
+        with metrics.track_llm_call("azure_openai_fallback"):
+            azure_client = _make_azure_llm(max_tokens=200)
+            result = azure_client.invoke([
+                SystemMessage(content=system),
+                HumanMessage(content="[The interview session is starting now.]"),
+            ])
+        metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
+        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="azure_fallback")
+        return result.content.strip()
 
     # Skip a Groq attempt we already know is very likely to 429 under load —
     # see rate_limit.groq_budget_available's docstring for why.
@@ -462,13 +469,18 @@ def next_question(
             sys_prompt += f"\n\nIMPORTANT: {corrective}"
 
         def _via_fallback() -> str:
-            raw_msgs = [{"role": "system", "content": sys_prompt}]
-            for m in lc_history:
-                raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
-            raw_msgs.append({"role": "user", "content": last_turn})
+            # Azure OpenAI, not Ollama-cloud — see opening_message's
+            # _via_fallback for why.
             metrics.record_fallback("interviewer")
-            with metrics.track_llm_call("ollama_fallback"):
-                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+            with metrics.track_llm_call("azure_openai_fallback"):
+                azure_client = _make_azure_llm(max_tokens=250)
+                result = azure_client.invoke([
+                    SystemMessage(content=sys_prompt),
+                    *lc_history,
+                    HumanMessage(content=last_turn),
+                ])
+            metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
+            return result.content.strip()
 
         # Skip a Groq attempt we already know is very likely to 429 under
         # load — see rate_limit.groq_budget_available's docstring for why.
