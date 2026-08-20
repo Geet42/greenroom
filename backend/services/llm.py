@@ -439,18 +439,41 @@ def next_question(
         elements_note = (
             f" Listen for: {', '.join(expected)}." if expected else ""
         )
-        system_prompt += (
-            f"\n\nFocus this behavioral session on the following question: "
-            f"\"{assigned_question['prompt']}\"\n\n"
-            f"Present this question naturally once the candidate has introduced themselves, "
-            f"then ask targeted follow-up questions to surface the Situation, Task, Action, "
-            f"and Result in their answer.{elements_note}"
-        )
+        if is_new_assignment:
+            system_prompt += (
+                f"\n\nFocus this behavioral session on the following question: "
+                f"\"{assigned_question['prompt']}\"\n\n"
+                f"Present this question naturally once the candidate has introduced themselves, "
+                f"then ask targeted follow-up questions to surface the Situation, Task, Action, "
+                f"and Result in their answer.{elements_note}"
+            )
+        else:
+            # This exact wording ("present it once they've introduced
+            # themselves") used to be sent unconditionally on every turn,
+            # including the 5th and 10th — telling the model the question
+            # still hadn't been asked yet long after it had been. Real
+            # transcript evidence: an interviewer re-asked for the
+            # candidate's background and re-asked "what's your approach"
+            # after they'd already answered both, because nothing in the
+            # prompt distinguished "first time" from "tenth follow-up."
+            system_prompt += (
+                f"\n\nThe candidate has ALREADY been asked, and is answering, this behavioral "
+                f"question: \"{assigned_question['prompt']}\"\n\n"
+                f"Do NOT re-introduce the question or re-ask for their background — read the "
+                f"conversation so far and ask a targeted follow-up that surfaces whichever part "
+                f"of Situation/Task/Action/Result is still missing or thin.{elements_note}"
+            )
     if track == "system-design" and assigned_question:
+        presented_note = (
+            "Present this problem naturally once the candidate has introduced themselves."
+            if is_new_assignment else
+            "The candidate has ALREADY been given this problem and is working through it — "
+            "do not re-present it or re-ask for their background."
+        )
         system_prompt += (
             f"\n\nThe system design problem for this session is: {assigned_question['prompt']}\n\n"
-            "Keep probing the candidate's design choices, component selection, trade-offs, "
-            "and how they would handle scale and failure."
+            f"{presented_note} Keep probing the candidate's design choices, component selection, "
+            "trade-offs, and how they would handle scale and failure."
         )
     if track == "technical" and assigned_question:
         is_stdio = bool(assigned_question.get("tests") and "stdin" in assigned_question["tests"][0])
@@ -473,11 +496,31 @@ def next_question(
                     f"The candidate should implement it as a function named "
                     f"`{method_name or 'the appropriate signature'}`."
                 )
-        system_prompt += (
-            f"\n\nThe coding problem assigned to this candidate is exactly this one — present it "
-            f"(you may paraphrase the wording, but keep the requirements identical) once their "
-            f"introduction is done, then follow up on their approach: {assigned_question['prompt']}\n\n{io_note}"
-        )
+        if is_new_assignment:
+            system_prompt += (
+                f"\n\nThe coding problem assigned to this candidate is exactly this one — present it "
+                f"(you may paraphrase the wording, but keep the requirements identical) once their "
+                f"introduction is done, then follow up on their approach: {assigned_question['prompt']}\n\n{io_note}"
+            )
+        else:
+            # See the behavioral branch above for why this is split out —
+            # same bug, same fix. Real transcript evidence for this exact
+            # track: the candidate submitted a correct, complete solution
+            # (Counter(s) == Counter(t)) and the interviewer's next message
+            # asked "how do you plan to determine whether t is an anagram
+            # of s?" — a strategy question about a problem already solved,
+            # because the prompt still said "present it once introduced" as
+            # if it hadn't happened yet.
+            system_prompt += (
+                f"\n\nThe candidate has ALREADY been given, and is working on, this exact coding "
+                f"problem — do not re-present it or re-ask for their background: "
+                f"{assigned_question['prompt']}\n\n{io_note}\n\n"
+                f"Read the conversation and their current code so far, and ask a follow-up about "
+                f"whatever hasn't been covered yet: their approach/reasoning if they haven't "
+                f"explained it, complexity, edge cases, trade-offs, or alternative implementations. "
+                f"If they've already submitted a correct solution without explaining it, ask them "
+                f"to walk through it rather than asking again how they'd solve it."
+            )
 
     # Split history: everything except the last candidate turn goes into
     # MessagesPlaceholder; the last candidate turn is the current "human" input.
