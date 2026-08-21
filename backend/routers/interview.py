@@ -241,6 +241,7 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         question = await run_in_threadpool(
             llm.next_question, session["track"], session["role"], session["history"],
             session.get("assigned_question"), session.get("job_description"), is_first_reply or wants_new_question,
+            is_question_swap=wants_new_question,
         )
 
         session["history"].append({"role": "interviewer", "content": question})

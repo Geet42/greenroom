@@ -409,6 +409,7 @@ def opening_message(track: str, role: str) -> str:
 def next_question(
     track: str, role: str, history: list[dict], assigned_question: dict | None = None,
     job_description: str | None = None, is_new_assignment: bool = False,
+    is_question_swap: bool = False,
 ) -> str:
     """
     LangChain LCEL interview chain:
@@ -420,11 +421,26 @@ def next_question(
     Output passes through the guardrail layer (services.guardrail) before it
     reaches the candidate — see that module for why this exists.
 
-    is_new_assignment: True only on the turn `assigned_question` is first being
-    presented. On every later turn, the platform can't actually swap the code
-    editor to a different problem, so the guardrail also blocks the model from
-    trying to introduce a second one — prompt-hardening alone isn't reliable
-    enough (see TRACK_PERSONAS["technical"]), so this is defense in depth.
+    is_new_assignment: True on the turn `assigned_question` is first being
+    presented, OR when the candidate explicitly swapped to a different
+    problem mid-session (is_question_swap below) — both are "the model
+    should present this problem now" moments, as opposed to every later
+    follow-up turn. On follow-up turns the platform can't actually swap the
+    code editor to a different problem either, so the guardrail also blocks
+    the model from trying to introduce a second one on its own —
+    prompt-hardening alone isn't reliable enough (see
+    TRACK_PERSONAS["technical"]), so this is defense in depth.
+
+    is_question_swap: True specifically when is_new_assignment is True
+    *because the candidate asked for a different problem*, not because this
+    is the session's very first assignment. This distinction matters: `history`
+    (below) still contains every prior turn discussing the OLD problem, and a
+    system prompt merely mentioning the new one wasn't enough to overcome
+    that conversational momentum in practice — the model kept asking
+    follow-ups about the abandoned problem despite the system prompt (and the
+    UI/code editor) having already moved on. This flag triggers an explicit
+    "ignore everything above, that was a different problem" instruction
+    instead of the softer first-assignment phrasing.
 
     assigned_question: for "technical" sessions, a problem pulled from the
     curated question bank (services.question_bank) — when present, the
@@ -464,12 +480,22 @@ def next_question(
                 f"of Situation/Task/Action/Result is still missing or thin.{elements_note}"
             )
     if track == "system-design" and assigned_question:
-        presented_note = (
-            "Present this problem naturally once the candidate has introduced themselves."
-            if is_new_assignment else
-            "The candidate has ALREADY been given this problem and is working through it — "
-            "do not re-present it or re-ask for their background."
-        )
+        if is_question_swap:
+            presented_note = (
+                "The candidate just asked for a DIFFERENT problem, and this new one has been "
+                "assigned — the code/diagram board has already been reset to it. Every message "
+                "above this point in the conversation was about a DIFFERENT, now-abandoned "
+                "problem — do not reference it, follow up on it, or compare to it. Introduce "
+                "this new problem now as a genuinely fresh start, the same way you would at the "
+                "very beginning of the interview."
+            )
+        elif is_new_assignment:
+            presented_note = "Present this problem naturally once the candidate has introduced themselves."
+        else:
+            presented_note = (
+                "The candidate has ALREADY been given this problem and is working through it — "
+                "do not re-present it or re-ask for their background."
+            )
         system_prompt += (
             f"\n\nThe system design problem for this session is: {assigned_question['prompt']}\n\n"
             f"{presented_note} Keep probing the candidate's design choices, component selection, "
@@ -496,7 +522,22 @@ def next_question(
                     f"The candidate should implement it as a function named "
                     f"`{method_name or 'the appropriate signature'}`."
                 )
-        if is_new_assignment:
+        if is_question_swap:
+            # Real bug report: the code editor and question panel correctly
+            # updated to the new problem, but the model's spoken response
+            # kept following up on the OLD one — the system prompt mentioned
+            # the new problem, but every turn in `history` still discussed
+            # the old one, and that conversational momentum won. Same fix as
+            # system-design's swap case: explicitly disown the prior history.
+            system_prompt += (
+                f"\n\nThe candidate just asked for a DIFFERENT coding problem, and this new one "
+                f"has been assigned — the code editor has already been reset to it. Every message "
+                f"above this point in the conversation was about a DIFFERENT, now-abandoned "
+                f"problem — do not reference it, follow up on it, or compare to it. Introduce this "
+                f"new problem now as a genuinely fresh start, the same way you would at the very "
+                f"beginning of the interview: {assigned_question['prompt']}\n\n{io_note}"
+            )
+        elif is_new_assignment:
             system_prompt += (
                 f"\n\nThe coding problem assigned to this candidate is exactly this one — present it "
                 f"(you may paraphrase the wording, but keep the requirements identical) once their "

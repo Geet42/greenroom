@@ -137,3 +137,63 @@ class TestSystemDesignTrack:
         system_lower = captured["system"].lower()
         assert "already been given this problem" in system_lower
         assert "do not re-present it" in system_lower
+
+
+NEW_SYSTEM_DESIGN_QUESTION = {"prompt": "Design a real-time chat application."}
+NEW_TECH_QUESTION = {
+    "prompt": "Write a function to find the longest substring without repeating characters.",
+    "function_name": "longest_unique_substring",
+    "tests": [{"input": "abcabcbb", "expected": "3"}],
+}
+
+
+class TestQuestionSwap:
+    """Real bug report: after a candidate asked for a different problem, the
+    board/code-editor correctly updated to the new one, but the interviewer's
+    spoken response kept following up on the OLD problem — the system prompt
+    mentioned the new one, but every turn in `history` still discussed the
+    old one, and that conversational momentum won out. is_question_swap
+    exists to override it with an explicit "disregard everything above"
+    instruction, distinct from a true first-time assignment."""
+
+    def test_system_design_swap_disowns_prior_history(self, monkeypatch):
+        captured = _capture_system_message(monkeypatch)
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            llm.next_question(
+                "system-design", "Software Engineer", _history(),
+                assigned_question=NEW_SYSTEM_DESIGN_QUESTION,
+                is_new_assignment=True, is_question_swap=True,
+            )
+        system_lower = captured["system"].lower()
+        assert "different problem" in system_lower
+        assert "now-abandoned" in system_lower or "abandoned" in system_lower
+        assert "design a real-time chat application" in system_lower
+        # Must NOT fall into the plain first-assignment phrasing, which says
+        # nothing about disregarding prior history.
+        assert "present this problem naturally once the candidate has introduced" not in system_lower
+
+    def test_technical_swap_disowns_prior_history(self, monkeypatch):
+        captured = _capture_system_message(monkeypatch)
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            llm.next_question(
+                "technical", "Software Engineer", _history(),
+                assigned_question=NEW_TECH_QUESTION,
+                is_new_assignment=True, is_question_swap=True,
+            )
+        system_lower = captured["system"].lower()
+        assert "different" in system_lower and "abandoned" in system_lower
+        assert "longest substring without repeating characters" in system_lower
+
+    def test_true_first_assignment_is_unaffected(self, monkeypatch):
+        """is_question_swap=False (the default) for a genuine first
+        assignment must keep the original, softer phrasing — swap handling
+        must not leak into the normal opening flow."""
+        captured = _capture_system_message(monkeypatch)
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            llm.next_question(
+                "system-design", "Software Engineer", _history(),
+                assigned_question=SYSTEM_DESIGN_QUESTION, is_new_assignment=True,
+            )
+        system_lower = captured["system"].lower()
+        assert "present this problem naturally once the candidate has introduced" in system_lower
+        assert "now-abandoned" not in system_lower
