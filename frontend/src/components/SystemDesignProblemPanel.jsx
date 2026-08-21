@@ -1,5 +1,5 @@
 import { useState } from "react";
-import Prose from "./Prose";
+import Prose, { stripTypographicDashes } from "./Prose";
 
 const DIFFICULTY_STYLES = {
   easy:   { label: "Easy",   className: "text-emerald-400 bg-emerald-400/10" },
@@ -53,7 +53,7 @@ export default function SystemDesignProblemPanel({ questionContext }) {
       {/* Header */}
       <div className="shrink-0 border-b border-white/5 px-5 pb-3 pt-4">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="font-display text-base font-semibold text-cream">{questionContext.title}</h2>
+          <h2 className="font-display text-base font-semibold text-cream">{stripTypographicDashes(questionContext.title)}</h2>
           <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${diff.className}`}>{diff.label}</span>
         </div>
 
@@ -65,7 +65,7 @@ export default function SystemDesignProblemPanel({ questionContext }) {
                 className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-xs text-cream/70"
                 title={tag.label}
               >
-                <span className="text-mute">{tag.label}:</span> {tag.value}
+                <span className="text-mute">{stripTypographicDashes(tag.label)}:</span> {stripTypographicDashes(tag.value)}
               </span>
             ))}
           </div>

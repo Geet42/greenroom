@@ -65,7 +65,7 @@ export default function TestResultsPanel({ testResults, revealedCount }) {
                 {tc.passed ? "✓" : "✗"}
               </span>
               Case {i + 1}
-              <span className="font-normal text-mute">— {tc.label}</span>
+              <span className="font-normal text-mute">· {tc.label}</span>
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {tc.input && <CodeField label="Input" value={tc.input} />}

@@ -29,6 +29,108 @@ from services import guardrail, metrics
 from services.logger import log
 from services.rate_limit import azure_budget_available, groq_budget_available
 
+# ── em/en dash sanitization ─────────────────────────────────────────────────
+# The candidate must never see an em or en dash anywhere in generated text
+# (greeting, interviewer follow-ups, evaluation reports, diagram feedback) —
+# LLMs reach for them constantly regardless of prompt style, so this is a
+# deterministic post-process on every path out of this module, not a prompt
+# instruction that the model could ignore or drift away from.
+_DASH_CHARS = "–—"  # en dash, em dash
+
+
+def _strip_typographic_dashes(text):
+    """Replace en/em dashes with plain ASCII punctuation. A dash flanked by
+    digits on both sides ("10–20", "2013—2015") is a numeric range and becomes
+    a hyphen so it still reads as one; anywhere else it's a clause separator
+    ("thought — and here's why") and becomes a comma, which reads the same way
+    in plain prose."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = re.sub(rf"(?<=\d)[{_DASH_CHARS}](?=\d)", "-", text)
+    text = re.sub(rf"\s*[{_DASH_CHARS}]\s*", ", ", text)
+    return text
+
+
+def _strip_markdown_emphasis(text):
+    """The interviewer's text is spoken aloud (TTS) and shown in a plain chat
+    bubble (not a markdown renderer) — markdown syntax the model reaches for
+    regardless of instruction ("**Problem:**", `` `functionName` ``) shows up
+    as literal asterisks/backticks on screen, and TTS reads a literal `*` as
+    the word "star". Strips the delimiter characters while keeping the text
+    they wrapped, so "**Problem:**" becomes "Problem:" instead of vanishing
+    or being read aloud symbol-by-symbol. Deliberately leaves underscores
+    alone — candidate-facing text routinely contains real identifiers like
+    `two_sum`, and stripping underscores would mangle those."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = text.replace("*", "").replace("`", "")
+    return text
+
+
+def _is_blank(text) -> bool:
+    return not text or not text.strip()
+
+
+def _ensure_nonempty(text: str, fallback: str, event: str) -> str:
+    """Guards against a real, observed production failure: the LLM call
+    chain (Groq or a fallback provider) can return a 200 with a genuinely
+    empty completion, and none of the guardrail layers check for that — they
+    only check for LEAKED content, so an empty string trivially passes every
+    one of them unchanged and reaches the candidate as a silent dead end (the
+    chat bubble renders with nothing in it, no error, no retry — confirmed
+    live: three empty interviewer turns in one real session, each one saved
+    to the transcript as an empty string). A safe, non-empty continuation
+    prompt is always better than saying nothing at all."""
+    if text and text.strip():
+        return text
+    log.warning(event)
+    return fallback
+
+
+def _ensure_eval_fields_nonempty(result: dict) -> dict:
+    """Same failure class as _ensure_nonempty, for the evaluation report:
+    EvaluationResult's text fields (summary, star_analysis.*, each
+    evaluations[].feedback) are plain `str` with no length constraint, so
+    Pydantic validation accepts an empty string as "valid" — an empty
+    summary or feedback would reach the candidate's Results page as a blank
+    section with no error and no explanation."""
+    if not (result.get("summary") or "").strip():
+        log.warning("llm.evaluate_session.empty_summary")
+        result["summary"] = "No summary was generated for this session."
+    star = result.get("star_analysis") or {}
+    for key in ("situation", "task", "action", "result"):
+        if not (star.get(key) or "").strip():
+            star[key] = "N/A"
+    result["star_analysis"] = star
+    for ev in result.get("evaluations") or []:
+        if not (ev.get("feedback") or "").strip():
+            ev["feedback"] = "No feedback was generated for this category."
+    return result
+
+
+def _sanitize_text(text):
+    """The one place both text-cleanup passes (markdown emphasis, then
+    typographic dashes) are applied together, so every call site gets both
+    instead of some getting one and some the other by accident."""
+    return _strip_typographic_dashes(_strip_markdown_emphasis(text))
+
+
+def _strip_dashes_deep(value):
+    """Recursively applies _sanitize_text across a dict/list result tree
+    (evaluation reports, diagram evaluations) so every string field is
+    covered without hand-listing each key. Name kept for now to minimize
+    churn at call sites — covers markdown emphasis too, not just dashes."""
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, list):
+        return [_strip_dashes_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_dashes_deep(v) for k, v in value.items()}
+    return value
+
+
 # ── env ──────────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -125,8 +227,9 @@ def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
 
 @lru_cache(maxsize=8)
 def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureChatOpenAI:
-    """Evaluation-only LLM (Azure OpenAI gpt-5-mini). Used by evaluate_session,
-    _self_critique, and evaluate_diagram — nowhere else.
+    """Azure OpenAI (gpt-5-mini) client. Primary provider for evaluate_session,
+    _self_critique, and evaluate_diagram; also the second-tier fallback for
+    opening_message/next_question when Groq is over budget or erroring.
 
     gpt-5-mini is a reasoning-family model: it only accepts the default
     `temperature` (1) — passing any other value 400s — and without
@@ -338,26 +441,52 @@ def _history_to_lc(history: list[dict]) -> list:
 
 def opening_message(track: str, role: str) -> str:
     """LLM-generated warm greeting that opens the interview session."""
+    result = _ensure_nonempty(
+        _opening_message_impl(track, role),
+        "Thanks for joining. Let's get started, could you tell me a bit about your background?",
+        "llm.opening.empty_response",
+    )
+    return _sanitize_text(result)
+
+
+def _opening_message_impl(track: str, role: str) -> str:
     import time
     system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
     start = time.monotonic()
 
     def _via_ollama(reason: str) -> str:
         # Last resort — only reached when BOTH Groq and Azure OpenAI are
-        # unavailable/over budget. Ollama-cloud's free endpoint proved flaky
-        # under concurrent bursts (DNS errors), but at this point it's
-        # better than failing the request outright.
+        # unavailable/over budget/returned nothing usable. Ollama-cloud's
+        # free endpoint proved flaky under concurrent bursts (DNS errors),
+        # but at this point it's better than failing the request outright.
+        # There is nowhere left to cascade to after this, so it must never
+        # raise or return in a way the caller could mistake for success —
+        # any failure here degrades to "" and _ensure_nonempty (the true
+        # final safety net) turns that into real, visible text. Without this,
+        # a failure at this specific tier propagated uncaught all the way out
+        # of next_question()/opening_message() and 500'd the whole request
+        # instead of degrading gracefully — worse than the empty-text bug
+        # this whole cascade exists to prevent.
         log.warning("llm.opening.fallback.ollama_last_resort", track=track, error=reason)
-        with metrics.track_llm_call("ollama_fallback"):
-            result = _fallback_chat(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": "[The interview session is starting now.]"},
-                ],
-                max_tokens=120, temperature=0.9,
-            )
-        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
-        return result
+        try:
+            with metrics.track_llm_call("ollama_fallback"):
+                result = _fallback_chat(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": "[The interview session is starting now.]"},
+                    ],
+                    # 2000, not 120: the configured FALLBACK_MODEL is gpt-oss:20b
+                    # (see benchmark_models.py notes in DESIGN.md), itself a
+                    # reasoning model with no reasoning_effort control available
+                    # here — same empty-output risk as the Azure fallback above,
+                    # same fix.
+                    max_tokens=2000, temperature=0.9,
+                )
+            log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
+            return result
+        except Exception as exc:
+            log.error("llm.opening.ollama_last_resort_failed", track=track, error=str(exc))
+            return ""
 
     def _via_azure(reason: str) -> str:
         # Azure OpenAI — paid, and already proven reliable under load (it's
@@ -371,14 +500,28 @@ def opening_message(track: str, role: str) -> str:
             return _via_ollama("azure budget exhausted for this minute")
         try:
             with metrics.track_llm_call("azure_openai_fallback"):
-                azure_client = _make_azure_llm(max_tokens=200)
+                # 2000, not 200: gpt-5-mini can burn its entire completion-token
+                # budget on hidden reasoning even with reasoning_effort="minimal"
+                # (confirmed for evaluate_session/evaluate_diagram in DESIGN.md;
+                # this fallback path had the same tiny budget and hit the same
+                # failure — empty content, silently, until _ensure_nonempty's
+                # fallback text papered over it turn after turn).
+                azure_client = _make_azure_llm(max_tokens=2000)
                 result = azure_client.invoke([
                     SystemMessage(content=system),
                     HumanMessage(content="[The interview session is starting now.]"),
                 ])
             metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
             log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="azure_fallback")
-            return result.content.strip()
+            content = result.content.strip()
+            # A bigger token budget lowers the odds but never guarantees a
+            # non-empty reply (gpt-5-mini's hidden reasoning has no hard
+            # cap) — treat an empty 200 the same as an error and cascade to
+            # the next tier, instead of accepting it as "the" answer.
+            if _is_blank(content):
+                log.warning("llm.opening.azure_returned_empty", track=track)
+                return _via_ollama("azure returned an empty response")
+            return content
         except Exception as exc:
             return _via_ollama(str(exc))
 
@@ -397,7 +540,12 @@ def opening_message(track: str, role: str) -> str:
             ])
         metrics.record_usage("groq", GROQ_MODEL, getattr(result, "usage_metadata", None))
         log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="groq")
-        return result.content.strip()
+        content = result.content.strip()
+        if _is_blank(content):
+            log.warning("llm.opening.groq_returned_empty", track=track)
+            metrics.record_fallback("interviewer")
+            return _via_azure("groq returned an empty response")
+        return content
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
@@ -574,15 +722,22 @@ def next_question(
             sys_prompt += f"\n\nIMPORTANT: {corrective}"
 
         def _via_ollama() -> str:
-            # Last resort — only reached when BOTH Groq and Azure OpenAI are
-            # unavailable/over budget. See opening_message's _via_ollama for
-            # why this exists as a third tier rather than failing outright.
+            # Last resort, must never raise — see opening_message's
+            # _via_ollama for the full reasoning (same fix, same failure
+            # class: a failure here used to propagate uncaught and 500 the
+            # whole request instead of degrading to _ensure_nonempty's
+            # fallback text).
             raw_msgs = [{"role": "system", "content": sys_prompt}]
             for m in lc_history:
                 raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
             raw_msgs.append({"role": "user", "content": last_turn})
-            with metrics.track_llm_call("ollama_fallback"):
-                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+            try:
+                with metrics.track_llm_call("ollama_fallback"):
+                    # 2000, not 200 — see opening_message's _via_ollama for why.
+                    return _fallback_chat(raw_msgs, max_tokens=2000, temperature=temperature)
+            except Exception as exc:
+                log.error("llm.next_question.ollama_last_resort_failed", track=track, error=str(exc))
+                return ""
 
         def _via_azure() -> str:
             # Azure OpenAI — see opening_message's _via_azure for why, and
@@ -591,14 +746,26 @@ def next_question(
                 return _via_ollama()
             try:
                 with metrics.track_llm_call("azure_openai_fallback"):
-                    azure_client = _make_azure_llm(max_tokens=250)
+                    # 2000, not 250 — a real production failure, confirmed via a
+                    # live session's transcript: a long technical turn (pasted
+                    # code, several exchanges of history) with only 250 tokens
+                    # of budget left gpt-5-mini's hidden reasoning nothing to
+                    # write a visible reply with, over and over. See
+                    # opening_message's _via_azure for the full reasoning.
+                    azure_client = _make_azure_llm(max_tokens=2000)
                     result = azure_client.invoke([
                         SystemMessage(content=sys_prompt),
                         *lc_history,
                         HumanMessage(content=last_turn),
                     ])
                 metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
-                return result.content.strip()
+                content = result.content.strip()
+                # See opening_message's _via_azure for why an empty 200 is
+                # treated the same as an error here, not accepted as-is.
+                if _is_blank(content):
+                    log.warning("llm.next_question.azure_returned_empty", track=track)
+                    return _via_ollama()
+                return content
             except Exception:
                 return _via_ollama()
 
@@ -616,7 +783,12 @@ def next_question(
             ])
             chain = p | _make_llm(temperature=temperature, max_tokens=200) | StrOutputParser()
             with metrics.track_llm_call("groq"):
-                return chain.invoke({"history": lc_history, "input": last_turn})
+                content = chain.invoke({"history": lc_history, "input": last_turn})
+            if _is_blank(content):
+                log.warning("llm.next_question.groq_returned_empty", track=track)
+                metrics.record_fallback("interviewer")
+                return _via_azure()
+            return content
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             if status is None or status == 429 or (isinstance(status, int) and status >= 500):
@@ -652,7 +824,12 @@ def next_question(
         )
 
     log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
-    return result
+    result = _ensure_nonempty(
+        result,
+        "Let's continue, could you walk me through your current thinking?",
+        "llm.next_question.empty_response",
+    )
+    return _sanitize_text(result)
 
 
 def _reconcile_score(result: dict) -> None:
@@ -746,6 +923,11 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
       | JsonOutputParser(EvaluationResult)
     Falls back to Ollama-cloud on Groq rate-limit / server error.
     """
+    result = _ensure_eval_fields_nonempty(_evaluate_session_impl(track, role, history))
+    return _strip_dashes_deep(result)
+
+
+def _evaluate_session_impl(track: str, role: str, history: list[dict]) -> dict:
     transcript = _bounded_transcript(history)
 
     system_content = EVAL_SYSTEM_PROMPT.format(track=track, role=role)
@@ -804,7 +986,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
             "overall_score": 5,
             "summary": "Could not generate a detailed report this time. Your transcript has been saved.",
             "star_analysis": {
-                "situation": "—", "task": "—", "action": "—", "result": "—",
+                "situation": "N/A", "task": "N/A", "action": "N/A", "result": "N/A",
                 "star_score": 0, "missing_elements": [],
             },
             "evaluations": [],
@@ -916,12 +1098,22 @@ def evaluate_diagram(
     Returns a dict matching the DiagramEvaluation model.
 
     diagram_elements: the raw, autosaved board state (session["diagram_elements"]
-    — see POST /api/interview/diagram), preferred over parsing chat history
+    - see POST /api/interview/diagram), preferred over parsing chat history
     since a candidate who draws their diagram and immediately ends the session
     never gets a chance to echo it into a message (see generateBoardDescription
     in useInterviewSession.js, called only from handleSend). Falls back to
     the message-embedded description for older sessions/paths.
     """
+    result = _evaluate_diagram_impl(history, assigned_question, diagram_elements)
+    if not (result.get("feedback") or "").strip():
+        log.warning("llm.evaluate_diagram.empty_feedback")
+        result["feedback"] = "No feedback was generated for this diagram."
+    return _strip_dashes_deep(result)
+
+
+def _evaluate_diagram_impl(
+    history: list[dict], assigned_question: dict, diagram_elements: list[dict] | None = None,
+) -> dict:
     expected = assigned_question.get("expected_components") or []
     diagrams = _describe_diagram_elements(diagram_elements) or _extract_diagram_descriptions(history)
     prompt = DIAGRAM_EVAL_PROMPT.format(
@@ -935,7 +1127,7 @@ def evaluate_diagram(
         "components_missing": expected,
         "proximity_score": 0,
         "proximity_label": "needs work",
-        "feedback": "No architecture diagram was submitted — draw your design on the board and send it with your answer.",
+        "feedback": "No architecture diagram was submitted. Draw your design on the board and send it with your answer.",
     }
 
     try:

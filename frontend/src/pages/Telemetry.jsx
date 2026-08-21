@@ -53,7 +53,7 @@ function KpiCard({ label, value, sub, accent = "amber", delay = 0 }) {
         className={`pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl transition ${KPI_GLOW_CLASSES[accent]}`}
       />
       <p className="text-xs uppercase tracking-wide text-mute">{label}</p>
-      <p className="mt-1 font-display text-3xl text-cream">{value ?? "—"}</p>
+      <p className="mt-1 font-display text-3xl text-cream">{value ?? "N/A"}</p>
       {sub && <p className="mt-1 text-xs text-mute">{sub}</p>}
     </div>
   );
@@ -104,7 +104,7 @@ function TrackCard({ track, sessions, avgScore, completion, delay = 0 }) {
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3 text-xs">
         <span className="text-mute">Avg score</span>
-        <span className="text-cream/90 tabular-nums">{avgScore > 0 ? `${avgScore} / 10` : "—"}</span>
+        <span className="text-cream/90 tabular-nums">{avgScore > 0 ? `${avgScore} / 10` : "N/A"}</span>
       </div>
       <div className="mt-1.5 flex items-center justify-between text-xs">
         <span className="text-mute">Completion</span>
@@ -342,8 +342,8 @@ export default function Telemetry() {
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <KpiCard label="Total sessions" value={stats.total_sessions} accent="amber" delay={0} />
               <KpiCard label="Completed" value={stats.completed_sessions} sub={`${completionRate}% completion rate`} accent="sage" delay={60} />
-              <KpiCard label="Avg score" value={stats.avg_score > 0 ? `${stats.avg_score} / 10` : "—"} sub="across completed sessions" accent="coral" delay={120} />
-              <KpiCard label="Avg duration" value={stats.avg_duration_minutes > 0 ? `${stats.avg_duration_minutes} min` : "—"} sub="per completed session" accent="amber" delay={180} />
+              <KpiCard label="Avg score" value={stats.avg_score > 0 ? `${stats.avg_score} / 10` : "N/A"} sub="across completed sessions" accent="coral" delay={120} />
+              <KpiCard label="Avg duration" value={stats.avg_duration_minutes > 0 ? `${stats.avg_duration_minutes} min` : "N/A"} sub="per completed session" accent="amber" delay={180} />
             </div>
 
             {/* Track breakdown — sessions, score, and completion in one glanceable card per track */}
@@ -366,7 +366,7 @@ export default function Telemetry() {
             {/* Charts grid */}
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-panel px-6 py-5">
-                <h2 className="mb-4 text-sm font-medium text-cream">Sessions — last 14 days</h2>
+                <h2 className="mb-4 text-sm font-medium text-cream">Sessions, last 14 days</h2>
                 <DailyChart data={stats.sessions_last_14_days} />
               </div>
 
@@ -382,7 +382,7 @@ export default function Telemetry() {
 
             {/* Question difficulty/topic mix — technical + system-design */}
             <div>
-              <h2 className="mb-3 text-sm font-medium text-cream">Questions assigned — by topic &amp; difficulty</h2>
+              <h2 className="mb-3 text-sm font-medium text-cream">Questions assigned, by topic &amp; difficulty</h2>
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                 {QUESTION_TRACKS.map((t) => (
                   <QuestionMixCard

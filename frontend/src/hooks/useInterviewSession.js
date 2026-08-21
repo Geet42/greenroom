@@ -46,7 +46,7 @@ function isDiagramMeaningful(elements) {
 }
 
 const SESSION_EXPIRED_MESSAGE =
-  "Your session time is up — wrapping up and generating your report now...";
+  "Your session time is up. Wrapping up and generating your report now...";
 
 /**
  * Manages interview session lifecycle: init, send message, end.
@@ -87,6 +87,13 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
   // in-flight send) could otherwise call handleEnd/lockSession twice.
   const endingRef = useRef(false);
   const lockedRef = useRef(false);
+  // Last diagram description actually attached to a sent message — an
+  // unchanged diagram (candidate hasn't touched the canvas since their last
+  // turn) shouldn't re-embed the same description on every single message,
+  // bloating the transcript sent to the LLM turn after turn for no new
+  // information. Reset whenever a new question is assigned so the fresh
+  // question's diagram always gets attached at least once.
+  const lastSentDiagramDescRef = useRef(null);
 
   const { isSupported, isListening, transcript, interimTranscript, start, stop, reset } =
     useSpeechRecognition();
@@ -321,7 +328,10 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
       }
       setDiagramWarning(null);
       const desc = generateBoardDescription(elements);
-      if (desc) messageToSend = `${answer}\n\n${desc}`;
+      if (desc && desc !== lastSentDiagramDescRef.current) {
+        messageToSend = `${answer}\n\n${desc}`;
+        lastSentDiagramDescRef.current = desc;
+      }
     }
 
     setMessages((prev) => [...prev, { role: "candidate", text: answer }]);
@@ -339,7 +349,15 @@ export function useInterviewSession({ track, boardRef, onQuestionContext, resume
       });
       setMessages((prev) => [...prev, { role: "interviewer", text: res.question }]);
       speakIfUnmuted(res.question);
-      if (res.question_context && onQuestionContext) onQuestionContext(res.question_context, sessionId);
+      if (res.question_context && onQuestionContext) {
+        // A new question was just assigned (first assignment or a candidate-
+        // requested switch) — the next diagram sent belongs to a fresh
+        // problem, so it must be attached at least once even if its
+        // description happens to match whatever was last sent for the
+        // previous question.
+        lastSentDiagramDescRef.current = null;
+        onQuestionContext(res.question_context, sessionId);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 410) {
         // Session expired server-side (duration cap or idle timeout) between

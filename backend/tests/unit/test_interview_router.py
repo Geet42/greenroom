@@ -161,6 +161,127 @@ def test_message_happy_path_behavioral_follow_up(client):
     assert body["question"] == "Tell me more about that."
 
 
+# --- POST /interview/message — code de-duplication in the transcript -------
+
+def test_message_embeds_code_on_first_submission(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(session_id, track="technical", assigned_question={"id": "q-1"})
+    with patch.object(interview.llm, "next_question", return_value="How does this handle duplicates?"):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Here's my solution.",
+            "code": "def two_sum(nums, target): pass", "language": "python",
+        })
+    assert resp.status_code == 200
+    last_candidate_turn = session_store.SESSIONS[session_id]["history"][-2]
+    assert "def two_sum" in last_candidate_turn["content"]
+
+
+def test_message_does_not_reembed_identical_code(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(
+        session_id, track="technical", assigned_question={"id": "q-1"},
+        last_sent_code="def two_sum(nums, target): pass",
+    )
+    with patch.object(interview.llm, "next_question", return_value="Walk me through the edge cases."):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Still thinking about edge cases.",
+            "code": "def two_sum(nums, target): pass", "language": "python",
+        })
+    assert resp.status_code == 200
+    last_candidate_turn = session_store.SESSIONS[session_id]["history"][-2]
+    assert "def two_sum" not in last_candidate_turn["content"]
+    assert last_candidate_turn["content"] == "Still thinking about edge cases."
+
+
+def test_message_reembeds_code_once_it_actually_changes(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(
+        session_id, track="technical", assigned_question={"id": "q-1"},
+        last_sent_code="def two_sum(nums, target): pass",
+    )
+    with patch.object(interview.llm, "next_question", return_value="Good, that fixes it."):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Updated my fix.",
+            "code": "def two_sum(nums, target): return []", "language": "python",
+        })
+    assert resp.status_code == 200
+    last_candidate_turn = session_store.SESSIONS[session_id]["history"][-2]
+    assert "return []" in last_candidate_turn["content"]
+    assert session_store.SESSIONS[session_id]["last_sent_code"] == "def two_sum(nums, target): return []"
+
+
+def test_message_ignores_empty_code(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(session_id, track="technical", assigned_question={"id": "q-1"})
+    with patch.object(interview.llm, "next_question", return_value="Go on."):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Just thinking out loud.",
+            "code": "   ", "language": "python",
+        })
+    assert resp.status_code == 200
+    last_candidate_turn = session_store.SESSIONS[session_id]["history"][-2]
+    assert last_candidate_turn["content"] == "Just thinking out loud."
+
+
+# --- POST /interview/message — candidate-requested question switch ---------
+
+def test_message_switches_question_on_request(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(
+        session_id, track="technical", assigned_question={"id": "two-sum"},
+        candidate_intro="I'm a backend engineer.",
+    )
+    new_question = {"id": "reverse-linked-list", "title": "Reverse Linked List"}
+    with patch.object(interview.question_generator, "select_or_generate_question", return_value=new_question), \
+         patch.object(interview.llm, "next_question", return_value="Here's your new problem: ..."):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Can I get the next question please?",
+        })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["question_context"]["id"] == "reverse-linked-list"
+    session = session_store.SESSIONS[session_id]
+    assert session["assigned_question"]["id"] == "reverse-linked-list"
+    assert session["question_switch_count"] == 1
+
+
+def test_message_locks_question_switch_after_limit(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(
+        session_id, track="technical", assigned_question={"id": "two-sum"},
+        candidate_intro="I'm a backend engineer.",
+        question_switch_count=interview.MAX_QUESTION_SWITCHES,
+    )
+    with patch.object(interview.question_generator, "select_or_generate_question") as mock_pick, \
+         patch.object(interview.llm, "next_question") as mock_next_question:
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "Can I get the next question please?",
+        })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["question"] == interview.QUESTION_LIMIT_MESSAGE
+    assert body["question_context"] is None
+    # Locked out: neither a new question lookup nor a real LLM call happens.
+    mock_pick.assert_not_called()
+    mock_next_question.assert_not_called()
+    session = session_store.SESSIONS[session_id]
+    assert session["assigned_question"]["id"] == "two-sum"
+    assert session["question_switch_count"] == interview.MAX_QUESTION_SWITCHES
+
+
+def test_message_switch_request_not_detected_continues_normally(client):
+    session_id = str(uuid.uuid4())
+    _seed_session(session_id, track="technical", assigned_question={"id": "two-sum"})
+    with patch.object(interview.llm, "next_question", return_value="What's the time complexity?"):
+        resp = client.post("/api/interview/message", json={
+            "session_id": session_id, "message": "I'd use a hashmap for O(n) time.",
+        })
+    assert resp.status_code == 200
+    session = session_store.SESSIONS[session_id]
+    assert session["assigned_question"]["id"] == "two-sum"
+    assert session.get("question_switch_count", 0) == 0
+
+
 # --- GET /interview/{session_id}/resume ------------------------------------------------
 
 def test_resume_session_not_found(client):

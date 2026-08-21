@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 
+// Common written abbreviations read fine on screen but sound robotic spoken
+// aloud verbatim ("e.g." -> "eg") — expanded to how a person would actually
+// say them. Text-only (backend's _strip_markdown_emphasis/_strip_typographic_dashes
+// already clean the text for on-screen display); this only ever feeds TTS.
+const SPEECH_ABBREVIATIONS = [
+  [/\be\.g\.,?/gi, "for example"],
+  [/\bi\.e\.,?/gi, "that is"],
+  [/\betc\.(?!\w)/gi, "and so on"],
+  [/\bvs\.(?!\w)/gi, "versus"],
+];
+
+export function toSpokenText(text) {
+  let spoken = text;
+  for (const [pattern, replacement] of SPEECH_ABBREVIATIONS) {
+    spoken = spoken.replace(pattern, replacement);
+  }
+  return spoken;
+}
+
 export function useSpeechSynthesis() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef(null);
@@ -50,6 +69,7 @@ export function useSpeechSynthesis() {
 
   const speak = useCallback(async (text) => {
     if (!text || !isMountedRef.current) return;
+    const spokenText = toSpokenText(text);
     const myGeneration = ++generationRef.current;
     killCurrentPlayback();
     cancelledRef.current = false;
@@ -58,7 +78,7 @@ export function useSpeechSynthesis() {
     const isCurrent = () => generationRef.current === myGeneration && isMountedRef.current;
 
     try {
-      const url = await api.speak(text);
+      const url = await api.speak(spokenText);
       // A newer speak(), or stop(), ran while this fetch was in flight —
       // discard instead of starting playback over whatever's now current.
       if (!isCurrent() || cancelledRef.current) {
@@ -69,7 +89,7 @@ export function useSpeechSynthesis() {
       const audio = new Audio(url);
       audioRef.current = audio;
       audio.onended = () => { if (isCurrent()) setIsSpeaking(false); revokeAudioUrl(); };
-      audio.onerror = () => { revokeAudioUrl(); if (isCurrent() && !cancelledRef.current) fallbackToBrowser(text); };
+      audio.onerror = () => { revokeAudioUrl(); if (isCurrent() && !cancelledRef.current) fallbackToBrowser(spokenText); };
       if (pausedRef.current) {
         // Muted while this fetch was still in flight — keep the audio ready
         // to play from the start instead of dropping it, so unmuting has
@@ -79,7 +99,7 @@ export function useSpeechSynthesis() {
       }
       await audio.play();
     } catch {
-      if (isCurrent() && !cancelledRef.current && !pausedRef.current) fallbackToBrowser(text);
+      if (isCurrent() && !cancelledRef.current && !pausedRef.current) fallbackToBrowser(spokenText);
     }
 
     function fallbackToBrowser(value) {

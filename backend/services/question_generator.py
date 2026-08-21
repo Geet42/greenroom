@@ -376,7 +376,15 @@ async def select_or_generate_question(
         prompt, solution, calls = spec["prompt"], spec["solution_python"], spec["calls"]
         function_name = spec["function_name"]
         claimed = spec.get("claimed_outputs") or []
-        if not calls or len(calls) < 3 or not function_name:
+        # Same failure class as the live-conversation empty-response bug
+        # (services/llm.py's _ensure_nonempty): a present-but-empty title or
+        # prompt would build a question whose problem panel silently renders
+        # blank — checked for keys existing above, but never for them
+        # actually holding real text.
+        if (
+            not calls or len(calls) < 3 or not function_name
+            or not (title or "").strip() or not (prompt or "").strip()
+        ):
             return fallback_pick()
     except (KeyError, TypeError):
         return fallback_pick()

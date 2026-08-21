@@ -38,6 +38,12 @@ export function useCodeRunner() {
   // Tracks the last-known-original source per language, so the reset button
   // can restore it without refetching (starter code, or fetched harness boilerplate).
   const originalCodeRef = useRef({ python: STARTER_CODE.python });
+  // The code actually embedded in the transcript on the last send, per
+  // language — a message is only attached with a code block when the
+  // candidate's code is both real (not just the untouched starter/boilerplate)
+  // and different from what was already sent, so an unedited or unchanged
+  // editor doesn't re-embed an identical code block on every single turn.
+  const lastSentCodeRef = useRef({});
 
   // Fetches question-specific boilerplate for `langId` and swaps it in if found.
   // Shared by language switching and by the question-assigned handler below,
@@ -93,6 +99,7 @@ export function useCodeRunner() {
   const handleQuestionAssigned = (ctx, sessionId) => {
     setQuestionContext(ctx);
     originalCodeRef.current = { [language]: STARTER_CODE[language] };
+    lastSentCodeRef.current = {};
     setCode(STARTER_CODE[language]);
     setTestResults(null);
     setRevealedCount(0);
@@ -106,6 +113,21 @@ export function useCodeRunner() {
     setCode(original);
     setTestResults(null);
     setRevealedCount(0);
+  };
+
+  // Returns the code to attach to the next sent message, or undefined if it
+  // shouldn't be attached at all: still just the untouched starter/boilerplate
+  // (no real candidate work yet), or identical to what was already sent for
+  // this language. Call markCodeSent() after a successful send to record it.
+  const getCodeForSend = () => {
+    const original = originalCodeRef.current[language];
+    if (code === original) return undefined; // untouched boilerplate — nothing to show
+    if (code === lastSentCodeRef.current[language]) return undefined; // unchanged since last send
+    return code;
+  };
+
+  const markCodeSent = (sentCode) => {
+    lastSentCodeRef.current[language] = sentCode;
   };
 
   const handleRunCode = async (sessionId) => {
@@ -167,5 +189,7 @@ export function useCodeRunner() {
     handleQuestionAssigned,
     handleRunCode,
     handleResetBoilerplate,
+    getCodeForSend,
+    markCodeSent,
   };
 }

@@ -262,18 +262,84 @@ def sanitize_no_new_problem(draft: str, regenerate_fn, track: str | None = None)
 # instead of automatic.
 
 _CANDIDATE_NEW_PROBLEM_PATTERNS = [
-    re.compile(r"\bnext\s+(question|problem|dsa|challenge)\b", re.IGNORECASE),
-    re.compile(r"\b(another|a\s+new|a\s+different)\s+(question|problem|challenge)\b", re.IGNORECASE),
-    re.compile(r"\bcan\s+(i|we)\s+(get|have|move\s+on\s+to)\s+(another|a\s+new|the\s+next)\b", re.IGNORECASE),
+    # "next question/problem/dsa/challenge", allowing an optional possessive/
+    # article and an optional topic word in between ("next DSA question",
+    # "next system design question", "next my question" would all match) —
+    # a bare "\bnext\s+(question|...)\b" missed anything with a qualifier
+    # between "next" and the noun.
+    re.compile(r"\bnext\s+(\w+\s+){0,2}?(question|problem|challenge|dsa|round)\b", re.IGNORECASE),
+    re.compile(r"\b(another|a\s+new|a\s+different)\s+(\w+\s+){0,2}?(question|problem|challenge)\b", re.IGNORECASE),
+    re.compile(r"\bcan\s+(i|we)\s+(get|have|move\s+on\s+to|try)\s+(another|a\s+new|the\s+next)\b", re.IGNORECASE),
     re.compile(r"\b(skip|change)\s+(this\s+)?(question|problem)\b", re.IGNORECASE),
-    re.compile(r"\bgive\s+me\s+(another|a\s+new|the\s+next)\s+(question|problem|challenge)\b", re.IGNORECASE),
+    # "give me (my|the|another|a new|the next) ... question/problem/challenge"
+    # — the optional possessive ("my") and optional topic word ("DSA",
+    # "system design") are what the original pattern missed.
+    re.compile(
+        r"\bgive\s+me\s+(my\s+|the\s+|another\s+|a\s+new\s+|a\s+different\s+)?"
+        r"(next\s+)?(\w+\s+){0,2}?(question|problem|challenge)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bmove\s+on\s+to\s+(another|a\s+new|the\s+next)\b", re.IGNORECASE),
+    re.compile(r"\b(i'?m|i\s+am)\s+done\s+with\s+this\s+(question|problem)\b", re.IGNORECASE),
 ]
+
+# Cheap pre-filter before paying for an LLM judge call: only phrasing that
+# contains at least one of these signal words is even plausibly a
+# question-switch request, so a normal follow-up answer (discussing
+# approach, complexity, trade-offs) never triggers the extra round-trip.
+_NEW_PROBLEM_HINT_WORDS = re.compile(
+    r"\b(next|another|different|new|skip|change|switch|move\s+on|done\s+with)\b", re.IGNORECASE
+)
+
+
+def _llm_judge_candidate_new_problem(text: str) -> bool:
+    """Layer 2 for the candidate-initiated switch: an LLM judge for phrasing
+    the regex layer doesn't recognize (e.g. "give me my next DSA question",
+    "can we try a different system design one"). Only called when the hint-word
+    pre-filter matches, so ordinary follow-up turns never pay for it. Fails
+    open to False — a missed switch request just continues as a normal
+    follow-up turn, which is always a safe fallback."""
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        return False
+    if not groq_budget_available():
+        return False
+    prompt = (
+        "Is the candidate in this interview message asking the interviewer to move on to a "
+        "DIFFERENT question or problem (a new one, a next one, a different one), as opposed to "
+        "continuing to discuss, answer, or work through the question they were already given? "
+        "Reply YES or NO only.\n\nCandidate message: " + text
+    )
+    try:
+        with metrics.track_llm_call("groq"):
+            resp = _HTTP_CLIENT.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 3,
+                    "temperature": 0,
+                },
+                timeout=5,
+            )
+            resp.raise_for_status()
+        answer = resp.json()["choices"][0]["message"]["content"].strip().upper()
+        return answer.startswith("YES")
+    except Exception as exc:
+        log.warning("guardrail.candidate_new_problem_judge_failed", error=str(exc))
+        return False
 
 
 def candidate_requests_new_problem(text: str) -> bool:
     """True if the CANDIDATE's message is asking to switch to a different
-    problem — e.g. 'next question please', 'can I get a different problem'.
-    Deliberately regex-only (no LLM judge): false negatives here just mean a
-    normal follow-up turn happens instead, which is always a safe fallback,
-    so there's no need to pay for a judge call on every single message."""
-    return any(p.search(text) for p in _CANDIDATE_NEW_PROBLEM_PATTERNS)
+    problem — e.g. 'next question please', 'give me my next DSA question',
+    'can I get a different system design problem'. Two layers: a regex fast
+    path for common phrasings (near-zero latency), then an LLM judge for
+    anything the regex misses, gated behind a cheap keyword pre-filter so
+    normal follow-up answers never pay for the extra call."""
+    if any(p.search(text) for p in _CANDIDATE_NEW_PROBLEM_PATTERNS):
+        return True
+    if not _NEW_PROBLEM_HINT_WORDS.search(text):
+        return False
+    return _llm_judge_candidate_new_problem(text)

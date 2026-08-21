@@ -163,4 +163,65 @@ describe("useCodeRunner", () => {
     expect(api.runTests).not.toHaveBeenCalled();
     expect(result.current.testResults).toBeNull();
   });
+
+  describe("getCodeForSend / markCodeSent", () => {
+    it("returns undefined for untouched starter code", () => {
+      const { result } = renderHook(() => useCodeRunner());
+      expect(result.current.getCodeForSend()).toBeUndefined();
+    });
+
+    it("returns the code once the candidate has actually written something", () => {
+      const { result } = renderHook(() => useCodeRunner());
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return []");
+      });
+      expect(result.current.getCodeForSend()).toBe("def two_sum(nums, target): return []");
+    });
+
+    it("returns undefined again once that code has been marked sent and hasn't changed", () => {
+      const { result } = renderHook(() => useCodeRunner());
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return []");
+      });
+      const sent = result.current.getCodeForSend();
+      act(() => {
+        result.current.markCodeSent(sent);
+      });
+      expect(result.current.getCodeForSend()).toBeUndefined();
+    });
+
+    it("returns the code again once it changes after being sent", () => {
+      const { result } = renderHook(() => useCodeRunner());
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return []");
+      });
+      act(() => {
+        result.current.markCodeSent(result.current.code);
+      });
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return [0, 1]");
+      });
+      expect(result.current.getCodeForSend()).toBe("def two_sum(nums, target): return [0, 1]");
+    });
+
+    it("handleQuestionAssigned clears the sent-code cache so a repeated edit on the new question sends again", async () => {
+      api.getBoilerplate.mockResolvedValue({ boilerplate: null, supported: true });
+      const { result } = renderHook(() => useCodeRunner());
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return []");
+      });
+      act(() => {
+        result.current.markCodeSent(result.current.code);
+      });
+
+      const ctx = { id: "q-2", title: "Reverse List", difficulty: "easy", prompt: "p", constraints: [], examples: [], is_stdio: false };
+      await act(async () => {
+        result.current.handleQuestionAssigned(ctx, "sess-1");
+      });
+      act(() => {
+        result.current.setCode("def two_sum(nums, target): return []"); // coincidentally same text as before
+      });
+      expect(result.current.getCodeForSend()).toBe("def two_sum(nums, target): return []");
+    });
+  });
 });

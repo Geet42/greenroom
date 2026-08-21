@@ -194,7 +194,7 @@ export default function Landing() {
             <div className="rounded-2xl border border-white/10 bg-panel p-8 opacity-80">
               <h3 className="font-display text-2xl">Pro</h3>
               <p className="mt-2 text-sm text-mute">For focused, high-volume prep. Coming soon.</p>
-              <p className="mt-6 font-display text-4xl">&mdash;</p>
+              <p className="mt-6 font-display text-4xl">TBD</p>
               <ul className="mt-6 space-y-3 text-sm text-mute">
                 <li>Role-tailored question banks from your resume</li>
                 <li>Higher-accuracy speech transcription</li>

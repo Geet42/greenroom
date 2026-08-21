@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Editor from "@monaco-editor/react";
-import Prose from "./Prose";
+import Prose, { stripTypographicDashes } from "./Prose";
 import TestResultsPanel from "./TestResultsPanel";
 
 const LANGUAGES = [
@@ -39,7 +39,7 @@ function ProblemPanel({ questionContext }) {
       {/* Problem header */}
       <div className="px-5 pt-4 pb-3 border-b border-white/5 shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="font-display text-base font-semibold text-cream">{questionContext.title}</h2>
+          <h2 className="font-display text-base font-semibold text-cream">{stripTypographicDashes(questionContext.title)}</h2>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${diff.className}`}>
             {diff.label}
           </span>
@@ -53,7 +53,7 @@ function ProblemPanel({ questionContext }) {
                 className="text-xs font-mono px-2 py-0.5 rounded-full bg-white/5 text-cream/70 border border-white/10"
                 title={tag.label}
               >
-                <span className="text-mute">{tag.label}:</span> {tag.value}
+                <span className="text-mute">{stripTypographicDashes(tag.label)}:</span> {stripTypographicDashes(tag.value)}
               </span>
             ))}
           </div>
@@ -92,16 +92,16 @@ function ProblemPanel({ questionContext }) {
                   <div className="font-mono text-xs space-y-1">
                     <div>
                       <span className="text-mute">Input: </span>
-                      <span className="text-cream">{String(ex.input ?? "")}</span>
+                      <span className="text-cream">{stripTypographicDashes(String(ex.input ?? ""))}</span>
                     </div>
                     <div>
                       <span className="text-mute">Output: </span>
-                      <span className="text-cream">{String(ex.output ?? "")}</span>
+                      <span className="text-cream">{stripTypographicDashes(String(ex.output ?? ""))}</span>
                     </div>
                     {ex.explanation && (
                       <div className="pt-1 text-cream/60">
                         <span className="text-mute">Explanation: </span>
-                        {ex.explanation}
+                        {stripTypographicDashes(ex.explanation)}
                       </div>
                     )}
                   </div>
@@ -239,7 +239,7 @@ export default function CodeEditor({
 
           {running && slowHint && (
             <p className="mt-2 text-xs text-white/50">
-              Preparing a verified test environment — first run can take up to a minute.
+              Preparing a verified test environment. First run can take up to a minute.
             </p>
           )}
 
