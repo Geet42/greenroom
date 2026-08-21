@@ -28,11 +28,16 @@ from services import llm
 def _capture_system_message(monkeypatch) -> dict:
     """Patches llm._make_llm so next_question()'s LCEL chain runs against a
     RunnableLambda instead of a real Groq call — captures the system
-    message actually sent and returns a fixed reply."""
+    message actually sent and returns a fixed reply. Also captures the full
+    message list (captured["messages"]) so tests can assert on how much
+    prior conversation history the model was actually shown, not just what
+    the system prompt says about it."""
     captured: dict = {}
 
     def _fake_llm_call(prompt_value):
-        captured["system"] = prompt_value.to_messages()[0].content
+        messages = prompt_value.to_messages()
+        captured["system"] = messages[0].content
+        captured["messages"] = messages
         return AIMessage(content="Fake follow-up question.")
 
     monkeypatch.setattr(llm, "_make_llm", lambda **kwargs: RunnableLambda(_fake_llm_call))
@@ -148,13 +153,22 @@ NEW_TECH_QUESTION = {
 
 
 class TestQuestionSwap:
-    """Real bug report: after a candidate asked for a different problem, the
-    board/code-editor correctly updated to the new one, but the interviewer's
-    spoken response kept following up on the OLD problem — the system prompt
-    mentioned the new one, but every turn in `history` still discussed the
-    old one, and that conversational momentum won out. is_question_swap
-    exists to override it with an explicit "disregard everything above"
-    instruction, distinct from a true first-time assignment."""
+    """Real bug report, in two rounds. Round 1: after a candidate asked for a
+    different problem, the board/code-editor correctly updated to the new
+    one, but the interviewer's spoken response kept following up on the OLD
+    problem — the system prompt mentioned the new one, but every turn in
+    `history` still discussed the old one. Fixed with an explicit "disregard
+    everything above" instruction.
+
+    Round 2: that instruction alone wasn't enough on a real production
+    session several turns deep into the old problem — the model kept
+    following up on it anyway, an instruction to ignore visible content
+    losing out to actual conversational momentum. So is_question_swap now
+    does two things: the explicit instruction (still checked below, belt
+    and suspenders) AND physically dropping lc_history so the old problem's
+    discussion was never shown to the model in the first place — that part
+    is checked by asserting on captured["messages"], not just the system
+    prompt text."""
 
     def test_system_design_swap_disowns_prior_history(self, monkeypatch):
         captured = _capture_system_message(monkeypatch)
@@ -171,6 +185,12 @@ class TestQuestionSwap:
         # Must NOT fall into the plain first-assignment phrasing, which says
         # nothing about disregarding prior history.
         assert "present this problem naturally once the candidate has introduced" not in system_lower
+        # The real fix: the old problem's discussion must not just be
+        # instructed away, it must be physically absent from what the model
+        # was shown. _history()'s middle turn is the old problem being
+        # introduced — must not appear anywhere in any message.
+        all_text = " ".join(m.content for m in captured["messages"]).lower()
+        assert "here's the problem" not in all_text
 
     def test_technical_swap_disowns_prior_history(self, monkeypatch):
         captured = _capture_system_message(monkeypatch)
@@ -183,6 +203,36 @@ class TestQuestionSwap:
         system_lower = captured["system"].lower()
         assert "different" in system_lower and "abandoned" in system_lower
         assert "longest substring without repeating characters" in system_lower
+        all_text = " ".join(m.content for m in captured["messages"]).lower()
+        assert "here's the problem" not in all_text
+
+    def test_swap_sends_only_system_and_current_message_no_history(self, monkeypatch):
+        """Direct proof of the history-truncation fix: for a 3-turn history,
+        a normal follow-up sends 4 messages (system + 2 history turns + the
+        current human turn); a swap must send only 2 (system + current human
+        turn) — lc_history dropped to empty, not merely "instructed away"."""
+        history = _history()
+
+        captured_normal = _capture_system_message(monkeypatch)
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            llm.next_question(
+                "system-design", "Software Engineer", history,
+                assigned_question=SYSTEM_DESIGN_QUESTION, is_new_assignment=False,
+            )
+        assert len(captured_normal["messages"]) == 4
+
+        captured_swap = _capture_system_message(monkeypatch)
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            llm.next_question(
+                "system-design", "Software Engineer", history,
+                assigned_question=NEW_SYSTEM_DESIGN_QUESTION,
+                is_new_assignment=True, is_question_swap=True,
+            )
+        assert len(captured_swap["messages"]) == 2
+        # The surviving human turn is still the candidate's actual last
+        # message (their request for a new problem) — only the history
+        # placeholder was emptied, not the current turn.
+        assert captured_swap["messages"][-1].content == history[-1]["content"]
 
     def test_true_first_assignment_is_unaffected(self, monkeypatch):
         """is_question_swap=False (the default) for a genuine first

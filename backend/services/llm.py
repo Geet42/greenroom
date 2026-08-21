@@ -582,13 +582,15 @@ def next_question(
     is_question_swap: True specifically when is_new_assignment is True
     *because the candidate asked for a different problem*, not because this
     is the session's very first assignment. This distinction matters: `history`
-    (below) still contains every prior turn discussing the OLD problem, and a
-    system prompt merely mentioning the new one wasn't enough to overcome
-    that conversational momentum in practice — the model kept asking
-    follow-ups about the abandoned problem despite the system prompt (and the
-    UI/code editor) having already moved on. This flag triggers an explicit
-    "ignore everything above, that was a different problem" instruction
-    instead of the softer first-assignment phrasing.
+    (below) still contains every prior turn discussing the OLD problem. An
+    explicit "ignore everything above" system-prompt instruction alone wasn't
+    enough to overcome that conversational momentum in practice — confirmed
+    on a real production session several turns deep into the old problem, the
+    model kept following up on it despite that instruction. So this flag does
+    two things, not one: it triggers the stronger prompt wording below, AND
+    it drops `lc_history` entirely a few lines down, so the model isn't shown
+    the old problem's discussion at all rather than being asked to disregard
+    content it can still see.
 
     assigned_question: for "technical" sessions, a problem pulled from the
     curated question bank (services.question_bank) — when present, the
@@ -713,7 +715,20 @@ def next_question(
 
     # Split history: everything except the last candidate turn goes into
     # MessagesPlaceholder; the last candidate turn is the current "human" input.
-    lc_history = _history_to_lc(history[:-1])  # all but last turn
+    if is_question_swap:
+        # Confirmed live: even with the explicit "disregard everything above,
+        # that was a different problem" instruction in the system prompt
+        # (above), the model kept following up on the OLD problem anyway on
+        # a real production session — several turns deep into a detailed
+        # technical discussion, that conversational momentum outweighed one
+        # extra system-prompt paragraph. Telling a model to ignore content
+        # it can still see is weaker than not showing it that content.
+        # Dropping prior history entirely on a swap gives the model the same
+        # clean-slate shape as the very first turn of the interview — it
+        # physically cannot follow up on a conversation it was never shown.
+        lc_history = []
+    else:
+        lc_history = _history_to_lc(history[:-1])  # all but last turn
     last_turn = history[-1]["content"] if history else ""
 
     def _ask(temperature: float = 0.7, corrective: str | None = None) -> str:
