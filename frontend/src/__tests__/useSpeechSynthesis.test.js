@@ -1,4 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// useSpeechSynthesis imports ../lib/api, which imports supabaseClient.ts and
+// constructs a real Supabase client at module load time — crashes in any
+// environment without real VITE_SUPABASE_* env vars (e.g. CI). Mocked the
+// same way every other hook test in this suite mocks ../lib/api, even
+// though toSpokenText itself never touches it.
+vi.mock("../lib/api", () => ({ api: { speak: vi.fn() } }));
+
 import { toSpokenText } from "../hooks/useSpeechSynthesis";
 
 // Real complaint: text that reads fine on screen ("e.g.") sounds robotic
