@@ -51,6 +51,43 @@ def _strip_typographic_dashes(text):
     return text
 
 
+def _ensure_nonempty(text: str, fallback: str, event: str) -> str:
+    """Guards against a real, observed production failure: the LLM call
+    chain (Groq or a fallback provider) can return a 200 with a genuinely
+    empty completion, and none of the guardrail layers check for that — they
+    only check for LEAKED content, so an empty string trivially passes every
+    one of them unchanged and reaches the candidate as a silent dead end (the
+    chat bubble renders with nothing in it, no error, no retry — confirmed
+    live: three empty interviewer turns in one real session, each one saved
+    to the transcript as an empty string). A safe, non-empty continuation
+    prompt is always better than saying nothing at all."""
+    if text and text.strip():
+        return text
+    log.warning(event)
+    return fallback
+
+
+def _ensure_eval_fields_nonempty(result: dict) -> dict:
+    """Same failure class as _ensure_nonempty, for the evaluation report:
+    EvaluationResult's text fields (summary, star_analysis.*, each
+    evaluations[].feedback) are plain `str` with no length constraint, so
+    Pydantic validation accepts an empty string as "valid" — an empty
+    summary or feedback would reach the candidate's Results page as a blank
+    section with no error and no explanation."""
+    if not (result.get("summary") or "").strip():
+        log.warning("llm.evaluate_session.empty_summary")
+        result["summary"] = "No summary was generated for this session."
+    star = result.get("star_analysis") or {}
+    for key in ("situation", "task", "action", "result"):
+        if not (star.get(key) or "").strip():
+            star[key] = "N/A"
+    result["star_analysis"] = star
+    for ev in result.get("evaluations") or []:
+        if not (ev.get("feedback") or "").strip():
+            ev["feedback"] = "No feedback was generated for this category."
+    return result
+
+
 def _strip_dashes_deep(value):
     """Recursively applies _strip_typographic_dashes across a dict/list
     result tree (evaluation reports, diagram evaluations) so every string
@@ -373,7 +410,12 @@ def _history_to_lc(history: list[dict]) -> list:
 
 def opening_message(track: str, role: str) -> str:
     """LLM-generated warm greeting that opens the interview session."""
-    return _strip_typographic_dashes(_opening_message_impl(track, role))
+    result = _ensure_nonempty(
+        _opening_message_impl(track, role),
+        "Thanks for joining. Let's get started, could you tell me a bit about your background?",
+        "llm.opening.empty_response",
+    )
+    return _strip_typographic_dashes(result)
 
 
 def _opening_message_impl(track: str, role: str) -> str:
@@ -650,6 +692,11 @@ def next_question(
         )
 
     log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
+    result = _ensure_nonempty(
+        result,
+        "Let's continue, could you walk me through your current thinking?",
+        "llm.next_question.empty_response",
+    )
     return _strip_typographic_dashes(result)
 
 
@@ -744,7 +791,8 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
       | JsonOutputParser(EvaluationResult)
     Falls back to Ollama-cloud on Groq rate-limit / server error.
     """
-    return _strip_dashes_deep(_evaluate_session_impl(track, role, history))
+    result = _ensure_eval_fields_nonempty(_evaluate_session_impl(track, role, history))
+    return _strip_dashes_deep(result)
 
 
 def _evaluate_session_impl(track: str, role: str, history: list[dict]) -> dict:
@@ -924,7 +972,11 @@ def evaluate_diagram(
     in useInterviewSession.js, called only from handleSend). Falls back to
     the message-embedded description for older sessions/paths.
     """
-    return _strip_dashes_deep(_evaluate_diagram_impl(history, assigned_question, diagram_elements))
+    result = _evaluate_diagram_impl(history, assigned_question, diagram_elements)
+    if not (result.get("feedback") or "").strip():
+        log.warning("llm.evaluate_diagram.empty_feedback")
+        result["feedback"] = "No feedback was generated for this diagram."
+    return _strip_dashes_deep(result)
 
 
 def _evaluate_diagram_impl(

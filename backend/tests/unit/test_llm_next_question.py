@@ -137,3 +137,31 @@ class TestSystemDesignTrack:
         system_lower = captured["system"].lower()
         assert "already been given this problem" in system_lower
         assert "do not re-present it" in system_lower
+
+
+class TestEmptyResponseGuard:
+    """Real production failure, confirmed via a live session's transcript:
+    the LLM call returned a genuinely empty string three times in one
+    session (each one saved to the database as an empty message) — none of
+    the guardrail layers catch this since they only check for LEAKED
+    content, not for emptiness. next_question must never return "" or
+    whitespace-only text to the candidate."""
+
+    def test_empty_llm_response_is_replaced_with_a_safe_fallback(self, monkeypatch):
+        monkeypatch.setattr(llm, "_make_llm", lambda **kwargs: RunnableLambda(lambda pv: AIMessage(content="")))
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            result = llm.next_question(
+                "technical", "Software Engineer", _history(),
+                assigned_question=TECH_QUESTION, is_new_assignment=True,
+            )
+        assert result.strip() != ""
+        assert "let's continue" in result.lower()
+
+    def test_whitespace_only_llm_response_is_replaced_with_a_safe_fallback(self, monkeypatch):
+        monkeypatch.setattr(llm, "_make_llm", lambda **kwargs: RunnableLambda(lambda pv: AIMessage(content="   \n  ")))
+        with patch.object(llm, "groq_budget_available", return_value=True):
+            result = llm.next_question(
+                "behavioral", "Software Engineer", _history(),
+                assigned_question=BEHAVIORAL_QUESTION, is_new_assignment=False,
+            )
+        assert result.strip() != ""

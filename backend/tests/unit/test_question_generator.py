@@ -97,6 +97,48 @@ async def test_select_or_generate_falls_back_to_bank_when_calls_missing():
     assert question == bank_question
 
 
+@pytest.mark.asyncio
+async def test_select_or_generate_falls_back_to_bank_when_title_is_empty():
+    # Same failure class as the live-conversation empty-response bug
+    # (services/llm.py's _ensure_nonempty): a present-but-blank title/prompt
+    # from the LLM would otherwise build a question whose problem panel
+    # silently renders empty.
+    spec = {
+        "action": "generate", "title": "  ", "topic": "y", "difficulty": "easy",
+        "prompt": "Implement f(x) that returns x.", "function_name": "f",
+        "solution_python": "def f(x): return x", "calls": ["f(1)", "f(2)", "f(3)"],
+    }
+    bank_question = {"id": "bank-1", "track": "technical", "topic": "arrays", "difficulty": "easy",
+                      "title": "Bank Q", "tests": [{"call": "f()", "expected": "1"}]}
+
+    with patch("services.question_bank._all_questions", return_value=[bank_question]), \
+         patch.object(question_generator, "_ask_llm", return_value=json.dumps(spec)), \
+         patch("services.question_bank.pick_question", return_value=bank_question) as mock_pick:
+        question = await question_generator.select_or_generate_question("Software Engineer", "")
+
+    mock_pick.assert_called_once()
+    assert question == bank_question
+
+
+@pytest.mark.asyncio
+async def test_select_or_generate_falls_back_to_bank_when_prompt_is_empty():
+    spec = {
+        "action": "generate", "title": "Some Problem", "topic": "y", "difficulty": "easy",
+        "prompt": "", "function_name": "f",
+        "solution_python": "def f(x): return x", "calls": ["f(1)", "f(2)", "f(3)"],
+    }
+    bank_question = {"id": "bank-1", "track": "technical", "topic": "arrays", "difficulty": "easy",
+                      "title": "Bank Q", "tests": [{"call": "f()", "expected": "1"}]}
+
+    with patch("services.question_bank._all_questions", return_value=[bank_question]), \
+         patch.object(question_generator, "_ask_llm", return_value=json.dumps(spec)), \
+         patch("services.question_bank.pick_question", return_value=bank_question) as mock_pick:
+        question = await question_generator.select_or_generate_question("Software Engineer", "")
+
+    mock_pick.assert_called_once()
+    assert question == bank_question
+
+
 # --- analyze_job_description (replaces hardcoded JD keyword matching) ------
 
 def test_analyze_job_description_empty_input_short_circuits():
