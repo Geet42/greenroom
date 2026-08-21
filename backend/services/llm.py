@@ -197,8 +197,9 @@ def _make_llm(temperature: float = 0.7, max_tokens: int = 300) -> ChatGroq:
 
 @lru_cache(maxsize=8)
 def _make_azure_llm(temperature: float = 0.7, max_tokens: int = 300) -> AzureChatOpenAI:
-    """Evaluation-only LLM (Azure OpenAI gpt-5-mini). Used by evaluate_session,
-    _self_critique, and evaluate_diagram — nowhere else.
+    """Azure OpenAI (gpt-5-mini) client. Primary provider for evaluate_session,
+    _self_critique, and evaluate_diagram; also the second-tier fallback for
+    opening_message/next_question when Groq is over budget or erroring.
 
     gpt-5-mini is a reasoning-family model: it only accepts the default
     `temperature` (1) — passing any other value 400s — and without
@@ -435,7 +436,12 @@ def _opening_message_impl(track: str, role: str) -> str:
                     {"role": "system", "content": system},
                     {"role": "user",   "content": "[The interview session is starting now.]"},
                 ],
-                max_tokens=120, temperature=0.9,
+                # 2000, not 120: the configured FALLBACK_MODEL is gpt-oss:20b
+                # (see benchmark_models.py notes in DESIGN.md), itself a
+                # reasoning model with no reasoning_effort control available
+                # here — same empty-output risk as the Azure fallback above,
+                # same fix.
+                max_tokens=2000, temperature=0.9,
             )
         log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
         return result
@@ -452,7 +458,13 @@ def _opening_message_impl(track: str, role: str) -> str:
             return _via_ollama("azure budget exhausted for this minute")
         try:
             with metrics.track_llm_call("azure_openai_fallback"):
-                azure_client = _make_azure_llm(max_tokens=200)
+                # 2000, not 200: gpt-5-mini can burn its entire completion-token
+                # budget on hidden reasoning even with reasoning_effort="minimal"
+                # (confirmed for evaluate_session/evaluate_diagram in DESIGN.md;
+                # this fallback path had the same tiny budget and hit the same
+                # failure — empty content, silently, until _ensure_nonempty's
+                # fallback text papered over it turn after turn).
+                azure_client = _make_azure_llm(max_tokens=2000)
                 result = azure_client.invoke([
                     SystemMessage(content=system),
                     HumanMessage(content="[The interview session is starting now.]"),
@@ -622,7 +634,8 @@ def next_question(
                 raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
             raw_msgs.append({"role": "user", "content": last_turn})
             with metrics.track_llm_call("ollama_fallback"):
-                return _fallback_chat(raw_msgs, max_tokens=200, temperature=temperature)
+                # 2000, not 200 — see opening_message's _via_ollama for why.
+                return _fallback_chat(raw_msgs, max_tokens=2000, temperature=temperature)
 
         def _via_azure() -> str:
             # Azure OpenAI — see opening_message's _via_azure for why, and
@@ -631,7 +644,13 @@ def next_question(
                 return _via_ollama()
             try:
                 with metrics.track_llm_call("azure_openai_fallback"):
-                    azure_client = _make_azure_llm(max_tokens=250)
+                    # 2000, not 250 — a real production failure, confirmed via a
+                    # live session's transcript: a long technical turn (pasted
+                    # code, several exchanges of history) with only 250 tokens
+                    # of budget left gpt-5-mini's hidden reasoning nothing to
+                    # write a visible reply with, over and over. See
+                    # opening_message's _via_azure for the full reasoning.
+                    azure_client = _make_azure_llm(max_tokens=2000)
                     result = azure_client.invoke([
                         SystemMessage(content=sys_prompt),
                         *lc_history,
