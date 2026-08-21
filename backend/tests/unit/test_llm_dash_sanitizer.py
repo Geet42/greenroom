@@ -7,7 +7,6 @@ from services.llm import (
     _strip_typographic_dashes,
 )
 
-
 # ── _ensure_nonempty ─────────────────────────────────────────────────────────
 # Guards a real production failure: the LLM call chain returned a genuinely
 # empty string three times in one live session (confirmed via the transcript
