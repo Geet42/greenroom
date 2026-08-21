@@ -70,7 +70,7 @@ export default function AuthForm({ mode }) {
         redirectTo: `${window.location.origin}/login`,
       });
       if (resetError) throw resetError;
-      setMessage("Password reset link sent — check your email.");
+      setMessage("Password reset link sent. Check your email.");
     } catch (err) {
       setError(err.message || "Something went wrong. Try again.");
     } finally {

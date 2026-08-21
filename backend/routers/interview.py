@@ -52,6 +52,18 @@ from services.supabase_client import get_supabase
 
 router = APIRouter(prefix="/interview", tags=["interview"])
 
+# How many times a candidate can ask for a different problem before being
+# locked to the one they're on: the original assignment plus this many
+# switches (2) gives 3 total questions per session. The 3rd switch attempt
+# (which would produce a 4th question) is refused with QUESTION_LIMIT_MESSAGE
+# instead of assigning anything new.
+MAX_QUESTION_SWITCHES = 2
+
+QUESTION_LIMIT_MESSAGE = (
+    "You've reached your question limit for this session. Let's dig deeper into this one instead. "
+    "What part of your current answer would you like to walk through?"
+)
+
 
 def _question_context(assigned: dict) -> QuestionContext:
     is_stdio = bool(assigned.get("tests") and "stdin" in assigned["tests"][0])
@@ -114,6 +126,8 @@ async def start_session(req: StartSessionRequest, user: AuthenticatedUser = Depe
         "diagram_elements": [],
         "asked_question_ids": set(),
         "candidate_intro": "",
+        "question_switch_count": 0,
+        "last_sent_code": None,
     }
     metrics.SESSIONS_STARTED.labels(track=req.track).inc()
 
@@ -162,9 +176,18 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         check_session_duration(session)
 
         candidate_content = req.message
-        if req.code:
+        # Only embed the candidate's code in the transcript when it's real,
+        # non-boilerplate work AND has actually changed since the last time it
+        # was attached — the frontend already sends `code` on every single
+        # turn (so a "Run" click's code shows up even without a fresh chat
+        # message), which previously re-embedded an identical, unchanged code
+        # block on every follow-up turn, bloating the transcript sent to the
+        # LLM on every call for no new information (the model already has the
+        # earlier turn with the same code in its conversation history).
+        if req.code and req.code.strip() and req.code != session.get("last_sent_code"):
             lang_label = f" ({req.language})" if req.language else ""
             candidate_content += f"\n\n[Candidate's submitted code{lang_label}]\n```\n{req.code}\n```"
+            session["last_sent_code"] = req.code
 
         is_first_reply = (
             session["track"] in ("technical", "system-design", "behavioral")
@@ -182,12 +205,14 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
         # signal the guardrail itself can't distinguish from the LLM going
         # off script on its own. Behavioral is excluded — there's no
         # editor/diagram state tied to the assigned prompt to desync.
-        wants_new_question = (
+        switch_requested = (
             not is_first_reply
             and session["track"] in ("technical", "system-design")
             and session.get("assigned_question")
             and guardrail.candidate_requests_new_problem(req.message)
         )
+        switch_limit_reached = bool(switch_requested) and session.get("question_switch_count", 0) >= MAX_QUESTION_SWITCHES
+        wants_new_question = bool(switch_requested) and not switch_limit_reached
 
         session["history"].append({"role": "candidate", "content": candidate_content})
         # Persist the code-inclusive content (not just req.message) — the
@@ -234,14 +259,22 @@ async def post_message(req: MessageRequest, user: AuthenticatedUser = Depends(ge
             if new_question:
                 session["assigned_question"] = new_question
                 session.setdefault("asked_question_ids", set()).add(new_question["id"])
+                session["question_switch_count"] = session.get("question_switch_count", 0) + 1
                 await run_in_threadpool(persist_assigned_question, req.session_id, new_question["id"])
             else:
                 wants_new_question = False  # bank exhausted — fall back to a normal follow-up turn
 
-        question = await run_in_threadpool(
-            llm.next_question, session["track"], session["role"], session["history"],
-            session.get("assigned_question"), session.get("job_description"), is_first_reply or wants_new_question,
-        )
+        if switch_limit_reached:
+            # Deterministic, no LLM call: this is a hard session rule, not a
+            # conversational judgment call, so it must never drift or vary
+            # with model phrasing — same reasoning as the guardrail's
+            # pre-written safe-fallback question (see services/guardrail.py).
+            question = QUESTION_LIMIT_MESSAGE
+        else:
+            question = await run_in_threadpool(
+                llm.next_question, session["track"], session["role"], session["history"],
+                session.get("assigned_question"), session.get("job_description"), is_first_reply or wants_new_question,
+            )
 
         session["history"].append({"role": "interviewer", "content": question})
         await run_in_threadpool(persist_message, req.session_id, "interviewer", question, session["next_sequence_no"])

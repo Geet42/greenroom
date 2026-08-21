@@ -227,7 +227,7 @@ export default function Dashboard() {
                   <button onClick={() => setSelectedTrack(null)} className="text-mute hover:text-cream">✕</button>
                 </div>
                 <p className="mt-1 text-sm text-mute">
-                  Paste a job description to tailor questions to the role — or leave blank for a general interview.
+                  Paste a job description to tailor questions to the role, or leave blank for a general interview.
                 </p>
                 <textarea
                   ref={jdRef}
@@ -360,9 +360,9 @@ export default function Dashboard() {
                           </td>
                         )}
                         <td className="px-4 py-3 capitalize">{s.track}</td>
-                        <td className="px-4 py-3 text-mute">{s.role || "—"}</td>
+                        <td className="px-4 py-3 text-mute">{s.role || "N/A"}</td>
                         <td className="px-4 py-3">
-                          {s.overall_score != null ? `${s.overall_score}/10` : "—"}
+                          {s.overall_score != null ? `${s.overall_score}/10` : "N/A"}
                         </td>
                         <td className="px-4 py-3 text-mute capitalize">{s.status}</td>
                         <td className="px-4 py-3 text-mute">

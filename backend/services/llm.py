@@ -29,6 +29,41 @@ from services import guardrail, metrics
 from services.logger import log
 from services.rate_limit import azure_budget_available, groq_budget_available
 
+# ── em/en dash sanitization ─────────────────────────────────────────────────
+# The candidate must never see an em or en dash anywhere in generated text
+# (greeting, interviewer follow-ups, evaluation reports, diagram feedback) —
+# LLMs reach for them constantly regardless of prompt style, so this is a
+# deterministic post-process on every path out of this module, not a prompt
+# instruction that the model could ignore or drift away from.
+_DASH_CHARS = "–—"  # en dash, em dash
+
+
+def _strip_typographic_dashes(text):
+    """Replace en/em dashes with plain ASCII punctuation. A dash flanked by
+    digits on both sides ("10–20", "2013—2015") is a numeric range and becomes
+    a hyphen so it still reads as one; anywhere else it's a clause separator
+    ("thought — and here's why") and becomes a comma, which reads the same way
+    in plain prose."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = re.sub(rf"(?<=\d)[{_DASH_CHARS}](?=\d)", "-", text)
+    text = re.sub(rf"\s*[{_DASH_CHARS}]\s*", ", ", text)
+    return text
+
+
+def _strip_dashes_deep(value):
+    """Recursively applies _strip_typographic_dashes across a dict/list
+    result tree (evaluation reports, diagram evaluations) so every string
+    field is covered without hand-listing each key."""
+    if isinstance(value, str):
+        return _strip_typographic_dashes(value)
+    if isinstance(value, list):
+        return [_strip_dashes_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_dashes_deep(v) for k, v in value.items()}
+    return value
+
+
 # ── env ──────────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -338,6 +373,10 @@ def _history_to_lc(history: list[dict]) -> list:
 
 def opening_message(track: str, role: str) -> str:
     """LLM-generated warm greeting that opens the interview session."""
+    return _strip_typographic_dashes(_opening_message_impl(track, role))
+
+
+def _opening_message_impl(track: str, role: str) -> str:
     import time
     system = OPENING_SYSTEM_PROMPT.format(track=track, role=role)
     start = time.monotonic()
@@ -611,7 +650,7 @@ def next_question(
         )
 
     log.info("llm.next_question", track=track, latency_ms=round((_time.monotonic() - _start) * 1000))
-    return result
+    return _strip_typographic_dashes(result)
 
 
 def _reconcile_score(result: dict) -> None:
@@ -705,6 +744,10 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
       | JsonOutputParser(EvaluationResult)
     Falls back to Ollama-cloud on Groq rate-limit / server error.
     """
+    return _strip_dashes_deep(_evaluate_session_impl(track, role, history))
+
+
+def _evaluate_session_impl(track: str, role: str, history: list[dict]) -> dict:
     transcript = _bounded_transcript(history)
 
     system_content = EVAL_SYSTEM_PROMPT.format(track=track, role=role)
@@ -763,7 +806,7 @@ def evaluate_session(track: str, role: str, history: list[dict]) -> dict:
             "overall_score": 5,
             "summary": "Could not generate a detailed report this time. Your transcript has been saved.",
             "star_analysis": {
-                "situation": "—", "task": "—", "action": "—", "result": "—",
+                "situation": "N/A", "task": "N/A", "action": "N/A", "result": "N/A",
                 "star_score": 0, "missing_elements": [],
             },
             "evaluations": [],
@@ -875,12 +918,18 @@ def evaluate_diagram(
     Returns a dict matching the DiagramEvaluation model.
 
     diagram_elements: the raw, autosaved board state (session["diagram_elements"]
-    — see POST /api/interview/diagram), preferred over parsing chat history
+    - see POST /api/interview/diagram), preferred over parsing chat history
     since a candidate who draws their diagram and immediately ends the session
     never gets a chance to echo it into a message (see generateBoardDescription
     in useInterviewSession.js, called only from handleSend). Falls back to
     the message-embedded description for older sessions/paths.
     """
+    return _strip_dashes_deep(_evaluate_diagram_impl(history, assigned_question, diagram_elements))
+
+
+def _evaluate_diagram_impl(
+    history: list[dict], assigned_question: dict, diagram_elements: list[dict] | None = None,
+) -> dict:
     expected = assigned_question.get("expected_components") or []
     diagrams = _describe_diagram_elements(diagram_elements) or _extract_diagram_descriptions(history)
     prompt = DIAGRAM_EVAL_PROMPT.format(
@@ -894,7 +943,7 @@ def evaluate_diagram(
         "components_missing": expected,
         "proximity_score": 0,
         "proximity_label": "needs work",
-        "feedback": "No architecture diagram was submitted — draw your design on the board and send it with your answer.",
+        "feedback": "No architecture diagram was submitted. Draw your design on the board and send it with your answer.",
     }
 
     try:

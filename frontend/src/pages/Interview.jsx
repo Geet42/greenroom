@@ -62,13 +62,26 @@ export default function Interview() {
   });
 
   // Technical/system-design want the interview panel to fill the viewport
-  // exactly (editor/board + their own internal scroll areas) on screens with
-  // room for it, WITHOUT ever hard-clipping content on shorter viewports —
-  // h-screen + overflow-hidden guaranteed the former but silently clipped
-  // Excalidraw's bottom toolbar with no way to reach it at all on a common
-  // 1366x768 laptop screen (verified). min-h-screen without overflow-hidden
-  // gives the same exact-fit result when there's room, and safely falls back
-  // to an ordinary page scrollbar (always recoverable) when there isn't.
+  // exactly (editor/board + their own internal scroll areas) and STAY that
+  // size as the transcript grows, on screens with room for it. That requires
+  // a real, bounded height somewhere in the ancestor chain for h-full/1fr to
+  // resolve against — min-h-screen alone doesn't provide one: a flex/grid
+  // container whose own height comes from min-height (not height) sizes
+  // itself to its content instead, so as the conversation column's message
+  // list grew, its overflow-y-auto never actually engaged (nothing was
+  // bounding it), and the whole row — including the editor/board column,
+  // which hadn't grown at all — grew right along with it (verified: this was
+  // the actual cause of the editor/canvas visibly growing over a session).
+  // lg:h-screen fixes that anchor; lg:min-h-0 on every flex/grid link in the
+  // chain down to the two columns stops each one from re-introducing the
+  // same "size to my content" default. Each column still owns its own
+  // internal overflow (transcript: overflow-y-auto; editor/board: see the
+  // side column below) instead of the ancestor ever hard-clipping, so a
+  // genuinely short viewport still degrades to a scrollbar, never lost
+  // content — that's the lg:overflow-y-auto note by the side column, not
+  // overflow-hidden, which silently clipped Excalidraw's bottom toolbar with
+  // no way to reach it at all on a common 1366x768 laptop screen (verified)
+  // the last time this was tried.
   //
   // All of that is a DESKTOP layout, though: the two columns collapse to
   // grid-cols-1 below lg (stacked), but grid-rows-[minmax(0,1fr)] only ever
@@ -81,13 +94,13 @@ export default function Interview() {
   const isFixedHeightTrack = track === "technical" || track === "system-design";
 
   return (
-    <div className="flex min-h-screen flex-col bg-stage">
+    <div className={`flex flex-col bg-stage ${isFixedHeightTrack ? "min-h-screen lg:h-screen" : "min-h-screen"}`}>
       <Navbar />
-      <main className={`flex-1 ${isFixedHeightTrack ? "lg:flex lg:flex-col" : ""}`}>
+      <main className={`flex-1 ${isFixedHeightTrack ? "lg:flex lg:flex-col lg:min-h-0" : ""}`}>
         <div
           className={`mx-auto grid grid-cols-1 gap-6 px-4 py-6 sm:px-6 sm:py-8 ${
             isFixedHeightTrack
-              ? "max-w-[1800px] lg:h-full lg:min-h-[600px] lg:grid-rows-[minmax(0,1fr)] lg:grid-cols-[380px_1fr]"
+              ? "max-w-[1800px] lg:h-full lg:min-h-0 lg:grid-rows-[minmax(0,1fr)] lg:grid-cols-[380px_1fr]"
               : "max-w-6xl lg:grid-cols-[1.1fr_1fr]"
           }`}
         >
@@ -189,7 +202,7 @@ export default function Interview() {
                   onChange={(e) => session.setAnswerText(e.target.value)}
                   readOnly={session.isListening}
                   disabled={session.sessionLocked}
-                  placeholder={session.sessionLocked ? "Session ended — your report is on its way" : "Press the mic and speak, or type here"}
+                  placeholder={session.sessionLocked ? "Session ended, your report is on its way" : "Press the mic and speak, or type here"}
                   className="mt-2 w-full resize-none rounded-lg bg-transparent text-sm text-cream outline-none disabled:opacity-50"
                   rows={3}
                 />
@@ -209,13 +222,19 @@ export default function Interview() {
                   <span className="text-xs text-mute">Hold Space to record</span>
                 )}
                 <button
-                  onClick={() =>
-                    session.handleSend(
-                      track === "technical"
-                        ? { code: codeRunner.code, language: codeRunner.language }
-                        : {}
-                    )
-                  }
+                  onClick={() => {
+                    if (track !== "technical") {
+                      session.handleSend({});
+                      return;
+                    }
+                    // Only attach code that's real work and has actually
+                    // changed since the last turn — see useCodeRunner's
+                    // getCodeForSend for why (avoids re-embedding an
+                    // unedited or already-sent code block on every message).
+                    const codeToSend = codeRunner.getCodeForSend();
+                    if (codeToSend !== undefined) codeRunner.markCodeSent(codeToSend);
+                    session.handleSend({ code: codeToSend, language: codeRunner.language });
+                  }}
                   disabled={session.sending || !session.answerText.trim() || session.sessionLocked}
                   className="rounded-full border border-white/10 px-5 py-2.5 text-sm text-cream transition hover:border-amber/40 disabled:opacity-50"
                 >
@@ -226,8 +245,14 @@ export default function Interview() {
           </section>
 
           {/* ── Side column ── */}
+          {/* lg:overflow-y-auto, not overflow-hidden: on a genuinely short
+              viewport where the editor/board's own minimum sizing (e.g.
+              SystemDesignBoard's 480px canvas floor) doesn't fit the space
+              this column is given, this column scrolls to reach the rest of
+              it instead of silently clipping content with no way back — the
+              exact failure mode overflow-hidden caused here before. */}
           <section
-            className={`min-h-0 rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "min-h-[70vh] lg:h-full lg:min-h-0 lg:overflow-hidden" : ""}`}
+            className={`min-h-0 rounded-2xl border border-white/10 bg-panel ${isFixedHeightTrack ? "min-h-[70vh] lg:h-full lg:min-h-0 lg:overflow-y-auto" : ""}`}
           >
             {track === "technical" ? (
               <CodeEditor
@@ -271,7 +296,7 @@ export default function Interview() {
     <div className="mt-6 space-y-3">
       <div className="rounded-xl border border-white/5 bg-panelLight/40 p-4">
         <p className="text-sm font-medium text-cream">🎙 Speak naturally</p>
-        <p className="mt-1 text-xs text-mute">The interviewer responds to what you actually say — no scripted replies.</p>
+        <p className="mt-1 text-xs text-mute">The interviewer responds to what you actually say, no scripted replies.</p>
       </div>
       <div className="rounded-xl border border-white/5 bg-panelLight/40 p-4">
         <p className="text-sm font-medium text-cream">⏸ Pause when you need to</p>
@@ -279,7 +304,7 @@ export default function Interview() {
       </div>
       <div className="rounded-xl border border-white/5 bg-panelLight/40 p-4">
         <p className="text-sm font-medium text-cream">⭐ Use the STAR method</p>
-        <p className="mt-1 text-xs text-mute">Structure your answers — Situation, Task, Action, Result — for clearer storytelling.</p>
+        <p className="mt-1 text-xs text-mute">Structure your answers (Situation, Task, Action, Result) for clearer storytelling.</p>
       </div>
       <div className="rounded-xl border border-white/5 bg-panelLight/40 p-4">
         <p className="text-sm font-medium text-cream">🏁 End when you're ready</p>

@@ -166,6 +166,117 @@ async function setUpStartedSession() {
   return result;
 }
 
+function twoNodeDiagram(secondLabel = "DB") {
+  return [
+    { id: "s1", type: "rectangle" },
+    { id: "s1-label", type: "text", containerId: "s1", text: "API" },
+    { id: "s2", type: "rectangle" },
+    { id: "s2-label", type: "text", containerId: "s2", text: secondLabel },
+    { id: "a1", type: "arrow", startBinding: { elementId: "s1" }, endBinding: { elementId: "s2" } },
+  ];
+}
+
+async function setUpStartedSystemDesignSession(getElements) {
+  api.startSession.mockResolvedValue({ session_id: "sess-1", track: "system-design", question: "Q1" });
+  const boardRef = { current: { getElements } };
+  const { result } = renderHook(() => useInterviewSession({ track: "system-design", boardRef }));
+  await waitFor(() => expect(result.current.sessionId).toBe("sess-1"));
+  return result;
+}
+
+describe("useInterviewSession — handleSend diagram de-duplication (system-design)", () => {
+  it("attaches the diagram description on the first send", async () => {
+    const result = await setUpStartedSystemDesignSession(() => twoNodeDiagram());
+    api.sendMessage.mockResolvedValue({ question: "Tell me about this design." });
+
+    act(() => result.current.setAnswerText("Here's my design."));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    const sentMessage = api.sendMessage.mock.calls[0][0].message;
+    expect(sentMessage).toContain("[Architecture diagram]");
+    expect(sentMessage).toContain("API");
+    expect(sentMessage).toContain("DB");
+  });
+
+  it("does not re-attach an identical diagram on the next send", async () => {
+    const result = await setUpStartedSystemDesignSession(() => twoNodeDiagram());
+    api.sendMessage.mockResolvedValue({ question: "Follow-up 1." });
+    act(() => result.current.setAnswerText("Here's my design."));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    api.sendMessage.mockResolvedValue({ question: "Follow-up 2." });
+    act(() => result.current.setAnswerText("Still thinking about the cache."));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    const secondMessage = api.sendMessage.mock.calls[1][0].message;
+    expect(secondMessage).toBe("Still thinking about the cache.");
+  });
+
+  it("re-attaches the diagram once it actually changes", async () => {
+    let elements = twoNodeDiagram();
+    const result = await setUpStartedSystemDesignSession(() => elements);
+    api.sendMessage.mockResolvedValue({ question: "Follow-up 1." });
+    act(() => result.current.setAnswerText("Here's my design."));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    elements = twoNodeDiagram("Cache"); // candidate relabels the second component
+    api.sendMessage.mockResolvedValue({ question: "Follow-up 2." });
+    act(() => result.current.setAnswerText("Added a cache layer."));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+
+    const secondMessage = api.sendMessage.mock.calls[1][0].message;
+    expect(secondMessage).toContain("[Architecture diagram]");
+    expect(secondMessage).toContain("Cache");
+  });
+
+  it("re-attaches the diagram after a candidate-requested question switch even if unchanged", async () => {
+    const result = await setUpStartedSystemDesignSession(() => twoNodeDiagram());
+    const onQuestionContext = vi.fn();
+    // Re-render with onQuestionContext wired (the default helper doesn't pass one).
+    const boardRef = { current: { getElements: () => twoNodeDiagram() } };
+    const { result: result2 } = renderHook(() =>
+      useInterviewSession({ track: "system-design", boardRef, onQuestionContext })
+    );
+    api.startSession.mockResolvedValue({ session_id: "sess-2", track: "system-design", question: "Q1" });
+    await waitFor(() => expect(result2.current.sessionId).toBe("sess-2"));
+
+    api.sendMessage.mockResolvedValue({ question: "First reply." });
+    act(() => result2.current.setAnswerText("Here's my design."));
+    await act(async () => {
+      await result2.current.handleSend();
+    });
+
+    api.sendMessage.mockResolvedValue({
+      question: "Here's your new problem.",
+      question_context: { id: "sd-2", title: "New Problem", difficulty: "medium", prompt: "p", constraints: [], examples: [] },
+    });
+    act(() => result2.current.setAnswerText("Can I get the next question please?"));
+    await act(async () => {
+      await result2.current.handleSend();
+    });
+    expect(onQuestionContext).toHaveBeenCalled();
+
+    api.sendMessage.mockResolvedValue({ question: "Follow-up on new problem." });
+    act(() => result2.current.setAnswerText("Here's my design for the new problem."));
+    await act(async () => {
+      await result2.current.handleSend();
+    });
+
+    const thirdMessage = api.sendMessage.mock.calls[2][0].message;
+    expect(thirdMessage).toContain("[Architecture diagram]");
+  });
+});
+
 describe("useInterviewSession — handleSend", () => {
   it("sends the candidate's answer and appends the interviewer's reply", async () => {
     const result = await setUpStartedSession();

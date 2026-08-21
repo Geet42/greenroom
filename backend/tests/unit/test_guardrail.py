@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from services.guardrail import _llm_judge, sanitize, violates
+from services.guardrail import _llm_judge, candidate_requests_new_problem, sanitize, violates
 
 # ── violates ─────────────────────────────────────────────────────────────────
 
@@ -135,3 +135,61 @@ def test_sanitize_triggers_regen_on_llm_judge_hit(monkeypatch):
     with patch("services.guardrail._HTTP_CLIENT.post", side_effect=fake_post):
         result = sanitize("This runs efficiently in linear time", "technical", regenerate_fn=lambda: good)
     assert result == good
+
+
+# ── candidate_requests_new_problem ────────────────────────────────────────────
+
+@pytest.mark.parametrize("text", [
+    "Can I get the next question?",
+    "Give me another problem please.",
+    "Can we move on to a different question?",
+    "Skip this question.",
+    "Change this problem for me.",
+    "Give me my next DSA question.",
+    "Give me the next system design question please.",
+    "Can I get a different system design problem?",
+    "Give me another challenge.",
+    "I'm done with this problem, what's next?",
+])
+def test_candidate_new_problem_regex_matches(text, monkeypatch):
+    # No API key configured -> if regex misses, the LLM-judge layer fails
+    # open to False, so a True result here can only come from the regex layer.
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert candidate_requests_new_problem(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "I think the time complexity of my solution is O(n).",
+    "Let me walk through my approach to this problem.",
+    "I'd use a hashmap here to speed things up.",
+    "Can you clarify what the constraints are?",
+])
+def test_candidate_new_problem_clean_messages_pass(text, monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert candidate_requests_new_problem(text) is False
+
+
+def test_candidate_new_problem_hint_filter_skips_llm_call_when_no_signal_words():
+    # A message with none of the hint words should never even attempt the
+    # LLM judge call, regardless of API key / mocking.
+    with patch("services.guardrail._HTTP_CLIENT.post") as mock_post:
+        assert candidate_requests_new_problem("I would use a two-pointer approach here.") is False
+        mock_post.assert_not_called()
+
+
+def test_candidate_new_problem_llm_judge_catches_novel_phrasing(monkeypatch):
+    # Regex misses this phrasing (no listed noun immediately after "next"),
+    # but it contains the hint word "next" so the LLM judge fires.
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    mock_response = type("R", (), {
+        "raise_for_status": lambda self: None,
+        "json": lambda self: {"choices": [{"message": {"content": "YES"}}]},
+    })()
+    with patch("services.guardrail._HTTP_CLIENT.post", return_value=mock_response):
+        assert candidate_requests_new_problem("I'd like to try something next, this one's not for me") is True
+
+
+def test_candidate_new_problem_llm_judge_fails_open_on_error(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    with patch("services.guardrail._HTTP_CLIENT.post", side_effect=Exception("network error")):
+        assert candidate_requests_new_problem("something next something") is False
