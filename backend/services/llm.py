@@ -51,6 +51,24 @@ def _strip_typographic_dashes(text):
     return text
 
 
+def _strip_markdown_emphasis(text):
+    """The interviewer's text is spoken aloud (TTS) and shown in a plain chat
+    bubble (not a markdown renderer) — markdown syntax the model reaches for
+    regardless of instruction ("**Problem:**", `` `functionName` ``) shows up
+    as literal asterisks/backticks on screen, and TTS reads a literal `*` as
+    the word "star". Strips the delimiter characters while keeping the text
+    they wrapped, so "**Problem:**" becomes "Problem:" instead of vanishing
+    or being read aloud symbol-by-symbol. Deliberately leaves underscores
+    alone — candidate-facing text routinely contains real identifiers like
+    `two_sum`, and stripping underscores would mangle those."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = text.replace("*", "").replace("`", "")
+    return text
+
+
 def _is_blank(text) -> bool:
     return not text or not text.strip()
 
@@ -92,12 +110,20 @@ def _ensure_eval_fields_nonempty(result: dict) -> dict:
     return result
 
 
+def _sanitize_text(text):
+    """The one place both text-cleanup passes (markdown emphasis, then
+    typographic dashes) are applied together, so every call site gets both
+    instead of some getting one and some the other by accident."""
+    return _strip_typographic_dashes(_strip_markdown_emphasis(text))
+
+
 def _strip_dashes_deep(value):
-    """Recursively applies _strip_typographic_dashes across a dict/list
-    result tree (evaluation reports, diagram evaluations) so every string
-    field is covered without hand-listing each key."""
+    """Recursively applies _sanitize_text across a dict/list result tree
+    (evaluation reports, diagram evaluations) so every string field is
+    covered without hand-listing each key. Name kept for now to minimize
+    churn at call sites — covers markdown emphasis too, not just dashes."""
     if isinstance(value, str):
-        return _strip_typographic_dashes(value)
+        return _sanitize_text(value)
     if isinstance(value, list):
         return [_strip_dashes_deep(v) for v in value]
     if isinstance(value, dict):
@@ -420,7 +446,7 @@ def opening_message(track: str, role: str) -> str:
         "Thanks for joining. Let's get started, could you tell me a bit about your background?",
         "llm.opening.empty_response",
     )
-    return _strip_typographic_dashes(result)
+    return _sanitize_text(result)
 
 
 def _opening_message_impl(track: str, role: str) -> str:
@@ -762,7 +788,7 @@ def next_question(
         "Let's continue, could you walk me through your current thinking?",
         "llm.next_question.empty_response",
     )
-    return _strip_typographic_dashes(result)
+    return _sanitize_text(result)
 
 
 def _reconcile_score(result: dict) -> None:

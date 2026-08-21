@@ -3,9 +3,44 @@ never see a typographic dash anywhere in generated text."""
 from services.llm import (
     _ensure_eval_fields_nonempty,
     _ensure_nonempty,
+    _sanitize_text,
     _strip_dashes_deep,
+    _strip_markdown_emphasis,
     _strip_typographic_dashes,
 )
+
+# ── _strip_markdown_emphasis ─────────────────────────────────────────────────
+# Real production complaint: the interviewer's text is spoken aloud (TTS) and
+# shown in a plain (non-markdown-rendering) chat bubble — literal "**Problem:**"
+# both reads oddly on screen and gets spoken as "star star Problem star star".
+
+def test_strip_markdown_removes_bold_delimiters_keeps_text():
+    assert _strip_markdown_emphasis("**Problem:** Implement a class.") == "Problem: Implement a class."
+
+
+def test_strip_markdown_removes_backtick_code_delimiters_keeps_text():
+    assert _strip_markdown_emphasis("Implement `majorityElement(nums)` now.") == \
+        "Implement majorityElement(nums) now."
+
+
+def test_strip_markdown_removes_stray_single_asterisks():
+    assert _strip_markdown_emphasis("This is *emphasized* text.") == "This is emphasized text."
+
+
+def test_strip_markdown_leaves_underscores_in_identifiers_alone():
+    # Real candidate-facing identifiers like two_sum must survive untouched —
+    # only asterisks/backticks are markdown noise here, not underscores.
+    assert _strip_markdown_emphasis("Implement two_sum(nums, target).") == "Implement two_sum(nums, target)."
+
+
+def test_strip_markdown_handles_none_and_empty():
+    assert _strip_markdown_emphasis(None) is None
+    assert _strip_markdown_emphasis("") == ""
+
+
+def test_sanitize_text_applies_both_markdown_and_dash_cleanup():
+    text = "**Problem:** use a hashmap — it's O(n) time."
+    assert _sanitize_text(text) == "Problem: use a hashmap, it's O(n) time."
 
 # ── _ensure_nonempty ─────────────────────────────────────────────────────────
 # Guards a real production failure: the LLM call chain returned a genuinely
