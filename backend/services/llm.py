@@ -51,6 +51,10 @@ def _strip_typographic_dashes(text):
     return text
 
 
+def _is_blank(text) -> bool:
+    return not text or not text.strip()
+
+
 def _ensure_nonempty(text: str, fallback: str, event: str) -> str:
     """Guards against a real, observed production failure: the LLM call
     chain (Groq or a fallback provider) can return a 200 with a genuinely
@@ -426,25 +430,37 @@ def _opening_message_impl(track: str, role: str) -> str:
 
     def _via_ollama(reason: str) -> str:
         # Last resort — only reached when BOTH Groq and Azure OpenAI are
-        # unavailable/over budget. Ollama-cloud's free endpoint proved flaky
-        # under concurrent bursts (DNS errors), but at this point it's
-        # better than failing the request outright.
+        # unavailable/over budget/returned nothing usable. Ollama-cloud's
+        # free endpoint proved flaky under concurrent bursts (DNS errors),
+        # but at this point it's better than failing the request outright.
+        # There is nowhere left to cascade to after this, so it must never
+        # raise or return in a way the caller could mistake for success —
+        # any failure here degrades to "" and _ensure_nonempty (the true
+        # final safety net) turns that into real, visible text. Without this,
+        # a failure at this specific tier propagated uncaught all the way out
+        # of next_question()/opening_message() and 500'd the whole request
+        # instead of degrading gracefully — worse than the empty-text bug
+        # this whole cascade exists to prevent.
         log.warning("llm.opening.fallback.ollama_last_resort", track=track, error=reason)
-        with metrics.track_llm_call("ollama_fallback"):
-            result = _fallback_chat(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": "[The interview session is starting now.]"},
-                ],
-                # 2000, not 120: the configured FALLBACK_MODEL is gpt-oss:20b
-                # (see benchmark_models.py notes in DESIGN.md), itself a
-                # reasoning model with no reasoning_effort control available
-                # here — same empty-output risk as the Azure fallback above,
-                # same fix.
-                max_tokens=2000, temperature=0.9,
-            )
-        log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
-        return result
+        try:
+            with metrics.track_llm_call("ollama_fallback"):
+                result = _fallback_chat(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": "[The interview session is starting now.]"},
+                    ],
+                    # 2000, not 120: the configured FALLBACK_MODEL is gpt-oss:20b
+                    # (see benchmark_models.py notes in DESIGN.md), itself a
+                    # reasoning model with no reasoning_effort control available
+                    # here — same empty-output risk as the Azure fallback above,
+                    # same fix.
+                    max_tokens=2000, temperature=0.9,
+                )
+            log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="ollama_last_resort")
+            return result
+        except Exception as exc:
+            log.error("llm.opening.ollama_last_resort_failed", track=track, error=str(exc))
+            return ""
 
     def _via_azure(reason: str) -> str:
         # Azure OpenAI — paid, and already proven reliable under load (it's
@@ -471,7 +487,15 @@ def _opening_message_impl(track: str, role: str) -> str:
                 ])
             metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
             log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="azure_fallback")
-            return result.content.strip()
+            content = result.content.strip()
+            # A bigger token budget lowers the odds but never guarantees a
+            # non-empty reply (gpt-5-mini's hidden reasoning has no hard
+            # cap) — treat an empty 200 the same as an error and cascade to
+            # the next tier, instead of accepting it as "the" answer.
+            if _is_blank(content):
+                log.warning("llm.opening.azure_returned_empty", track=track)
+                return _via_ollama("azure returned an empty response")
+            return content
         except Exception as exc:
             return _via_ollama(str(exc))
 
@@ -490,7 +514,12 @@ def _opening_message_impl(track: str, role: str) -> str:
             ])
         metrics.record_usage("groq", GROQ_MODEL, getattr(result, "usage_metadata", None))
         log.info("llm.opening", track=track, latency_ms=round((time.monotonic() - start) * 1000), provider="groq")
-        return result.content.strip()
+        content = result.content.strip()
+        if _is_blank(content):
+            log.warning("llm.opening.groq_returned_empty", track=track)
+            metrics.record_fallback("interviewer")
+            return _via_azure("groq returned an empty response")
+        return content
     except Exception as exc:
         status = getattr(exc, "status_code", None)
         if status is None or status == 429 or (isinstance(status, int) and status >= 500):
@@ -626,16 +655,22 @@ def next_question(
             sys_prompt += f"\n\nIMPORTANT: {corrective}"
 
         def _via_ollama() -> str:
-            # Last resort — only reached when BOTH Groq and Azure OpenAI are
-            # unavailable/over budget. See opening_message's _via_ollama for
-            # why this exists as a third tier rather than failing outright.
+            # Last resort, must never raise — see opening_message's
+            # _via_ollama for the full reasoning (same fix, same failure
+            # class: a failure here used to propagate uncaught and 500 the
+            # whole request instead of degrading to _ensure_nonempty's
+            # fallback text).
             raw_msgs = [{"role": "system", "content": sys_prompt}]
             for m in lc_history:
                 raw_msgs.append({"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content})
             raw_msgs.append({"role": "user", "content": last_turn})
-            with metrics.track_llm_call("ollama_fallback"):
-                # 2000, not 200 — see opening_message's _via_ollama for why.
-                return _fallback_chat(raw_msgs, max_tokens=2000, temperature=temperature)
+            try:
+                with metrics.track_llm_call("ollama_fallback"):
+                    # 2000, not 200 — see opening_message's _via_ollama for why.
+                    return _fallback_chat(raw_msgs, max_tokens=2000, temperature=temperature)
+            except Exception as exc:
+                log.error("llm.next_question.ollama_last_resort_failed", track=track, error=str(exc))
+                return ""
 
         def _via_azure() -> str:
             # Azure OpenAI — see opening_message's _via_azure for why, and
@@ -657,7 +692,13 @@ def next_question(
                         HumanMessage(content=last_turn),
                     ])
                 metrics.record_usage("azure_openai_fallback", AZURE_OPENAI_DEPLOYMENT, getattr(result, "usage_metadata", None))
-                return result.content.strip()
+                content = result.content.strip()
+                # See opening_message's _via_azure for why an empty 200 is
+                # treated the same as an error here, not accepted as-is.
+                if _is_blank(content):
+                    log.warning("llm.next_question.azure_returned_empty", track=track)
+                    return _via_ollama()
+                return content
             except Exception:
                 return _via_ollama()
 
@@ -675,7 +716,12 @@ def next_question(
             ])
             chain = p | _make_llm(temperature=temperature, max_tokens=200) | StrOutputParser()
             with metrics.track_llm_call("groq"):
-                return chain.invoke({"history": lc_history, "input": last_turn})
+                content = chain.invoke({"history": lc_history, "input": last_turn})
+            if _is_blank(content):
+                log.warning("llm.next_question.groq_returned_empty", track=track)
+                metrics.record_fallback("interviewer")
+                return _via_azure()
+            return content
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             if status is None or status == 429 or (isinstance(status, int) and status >= 500):

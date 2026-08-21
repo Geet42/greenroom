@@ -165,3 +165,18 @@ class TestEmptyResponseGuard:
                 assigned_question=BEHAVIORAL_QUESTION, is_new_assignment=False,
             )
         assert result.strip() != ""
+
+    def test_never_raises_even_when_every_tier_returns_empty_or_fails(self, monkeypatch):
+        # Groq returns empty (cascades to Azure) -> Azure isn't configured in
+        # this test env, so _make_azure_llm raises (cascades to Ollama) ->
+        # Ollama isn't configured either, so _fallback_chat raises too. The
+        # true last resort must swallow that final failure and return "",
+        # not let it propagate and 500 the whole /interview/message request.
+        monkeypatch.setattr(llm, "_make_llm", lambda **kwargs: RunnableLambda(lambda pv: AIMessage(content="")))
+        with patch.object(llm, "groq_budget_available", return_value=True), \
+             patch.object(llm, "azure_budget_available", return_value=True):
+            result = llm.next_question(
+                "technical", "Software Engineer", _history(),
+                assigned_question=TECH_QUESTION, is_new_assignment=True,
+            )
+        assert result.strip() != ""
